@@ -154,7 +154,7 @@ docker compose run --rm chopshop ./front_pipeline.sh 00_source/art.png # front h
 .venv/bin/pyflakes scripts/*.py validate_svg.py preflight.py  # lint
 ```
 
-The suite currently passes (198 tests). If you change the front half, add or
+The suite currently passes (193 tests). If you change the front half, add or
 update the matching test in `tests/` — especially any change to tracing,
 comparison, or prep behaviour.
 
@@ -166,9 +166,6 @@ comparison, or prep behaviour.
   and design decisions this file only summarises. `skills/README.md` explains
   how to re-import them into a Hermes install.
 - `scripts/FRONT_HALF.md` — front-half design (sweep, fidelity, parallelism).
-- `scripts/jev_annotate.py` — OPTIONAL add-on (not wired into any stage): Jev
-  decision sidecar. Needs `TYPESAFE_API_KEY` + network, so never run by default;
-  `--dry-run`/`--optional` degrade gracefully. Never picks a winner.
 - `OVERVIEW.md`, `HOWTO-print-check.md` — design and print-check walkthrough.
 - `spec.json` / `spec.example.json` — the job contract (front-half keys are
   under `print`: `assume_opaque_bg`, `prep_colors`, `background_hex`,

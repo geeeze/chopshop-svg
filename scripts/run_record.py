@@ -13,7 +13,7 @@ This script is the archive spine: it walks one run (keyed by its traced-dir
 stem) and writes ``<out-dir>/<stem>.run.json`` stitching, per candidate:
 
     source -> prep -> sweep entry -> SVG hash -> Layer A/B -> proof/PDF
-           -> Jev sidecar -> human decision
+           -> human decision
 
 It never picks a winner and never runs the pipeline.  It only reads.
 
@@ -194,16 +194,6 @@ def candidate_back_half(cand_id: str) -> dict:
     return record
 
 
-def candidate_jev(cand_id: str) -> dict:
-    path = FINAL_DIR / f"{cand_id}.jev.json"
-    data = _read_json(path)
-    record = _stamp(path, data is not None)
-    if data is not None:
-        record["status"] = data.get("status")
-        record["schema"] = data.get("schema")
-    return record
-
-
 def candidate_decision(cand_id: str, stem: str) -> dict:
     per_candidate = FINAL_DIR / f"{cand_id}.pick.json"
     run_level = VALIDATED_DIR / f"{stem}.decision.json"
@@ -297,7 +287,6 @@ def _build_candidates(stem, sweep, comparison) -> list[dict]:
             candidate["comparison"] = None
 
         candidate["back_half"] = candidate_back_half(cand_id)
-        candidate["jev"] = candidate_jev(cand_id)
         candidate["visual_review"] = candidate_visual_review(cand_id)
         candidate["human_decision"] = candidate_decision(cand_id, stem)
         candidates.append(candidate)
@@ -321,8 +310,8 @@ def _candidate_links(candidate: dict, *, duplicate_of: str | None):
 
     Blocking anomalies mean a stage genuinely failed or a traced candidate was
     never compared.  Open items are the *normal* state of a candidate the human
-    has not chosen / reviewed yet (or an optional step like Jev) -- they are
-    surfaced as counts, not as closeout failures.
+    has not chosen / reviewed yet -- they are surfaced as counts, not as
+    closeout failures.
     """
     missing: list[str] = []
     open_items: list[str] = []
@@ -342,8 +331,6 @@ def _candidate_links(candidate: dict, *, duplicate_of: str | None):
     else:
         open_items.append("back half not run (candidate not chosen)")
 
-    if not candidate["jev"]["found"]:
-        open_items.append("no Jev sidecar (optional)")
     if not candidate["visual_review"]["found"]:
         open_items.append("no visual review")
     if not candidate["human_decision"]["found"]:

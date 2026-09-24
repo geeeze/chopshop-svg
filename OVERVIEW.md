@@ -260,7 +260,7 @@ against 0.00–0.20% for every flat file in the batch.
 
 ## Current state — what's verified
 
-**154 tests, all passing** (`pytest tests/`), lint clean:
+**193 tests, all passing** (`pytest tests/`), lint clean. The back half:
 
 | suite | tests | covers |
 |---|---|---|
@@ -268,6 +268,9 @@ against 0.00–0.20% for every flat file in the batch.
 | `test_preflight.py` | 52 | ink measurement, tone detection, gate classification, garment assumption |
 | `test_snap_colors.py` | 8 | colour snapping incl. CSS cascade writes |
 | `test_validate_svg_negative.py` | 4 | the four headline failure modes, as a standalone contract |
+
+The front half adds its own suites (prep, trace sweep, comparison, pick/loop,
+run record) — the remaining tests in the 193 total.
 
 **Regression guards for the two measurement traps**, with synthetic fixtures so
 they can't silently return:
@@ -362,7 +365,7 @@ SPEC=other.json ./pipeline.sh x.svg            # different spec
 
 # the batch
 .venv/bin/python scripts/run_batch.py          # → 04_validated/batch_results.json
-.venv/bin/python -m pytest tests/ -q           # 154 tests
+.venv/bin/python -m pytest tests/ -q           # 193 tests
 
 # open the artwork by hand
 inkscape 00_source/art.svg
@@ -402,7 +405,7 @@ OVERVIEW.md                this document
 scripts/snap_colors.py     stage 3 — colour snapping
 scripts/svgo_print.yml     stage 3 — SVGO config (needs Node.js)
 scripts/run_batch.py       batch runner
-tests/                     154 tests
+tests/                     193 tests
 00_source/                 input artwork (+ the test batch)
 01_prepped/ 02_traced/ 03_cleaned/   stages 1–3 (2 and most of 3 unused so far)
 04_validated/              Layer A output + batch_results.json

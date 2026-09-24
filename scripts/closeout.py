@@ -6,7 +6,7 @@ Reads a ``run.json`` produced by ``scripts/run_record.py`` and checks every
 candidate against the requirements matrix (``requirements.json``).  Like
 CraftBot's Runner, it does NOT fix anything and does NOT pick a winner: it
 reports, per candidate and per requirement, whether the run is complete and
-where each failure lives (tracer / preflight / proof / review / Jev / human).
+where each failure lives (tracer / preflight / proof / review / human).
 
 Exit codes:
   0  run is closed: every structural link present and every requirement
@@ -125,7 +125,7 @@ def print_boards(run: dict, requirements: list[dict], waived: set[str]) -> bool:
     print()
     print("Candidate board (all failures shown, never stopped early):")
     header = ("candidate".ljust(20) + "cmp LA.hard LB.hard inks nodes "
-              "backhalf jev visual human")
+              "backhalf visual human")
     print(header)
     print("-" * len(header))
     for c in candidates:
@@ -141,7 +141,6 @@ def print_boards(run: dict, requirements: list[dict], waived: set[str]) -> bool:
             + str(comp.get("rendered_ink_colors", "-")).ljust(5)
             + str(comp.get("node_count_max", "-")).ljust(6)
             + ("Y" if back.get("run") else "-").ljust(9)
-            + ("Y" if c.get("jev", {}).get("found") else "-").ljust(6)
             + ("Y" if c.get("visual_review", {}).get("found") else "-").ljust(7)
             + ("Y" if c.get("human_decision", {}).get("found") else "-")
         )
@@ -219,12 +218,10 @@ def main(argv=None) -> int:
 
     candidates = run.get("candidates", [])
     n_back = sum(1 for c in candidates if c["back_half"]["run"])
-    n_jev = sum(1 for c in candidates if c["jev"]["found"])
     n_vis = sum(1 for c in candidates if c["visual_review"]["found"])
     n_hum = sum(1 for c in candidates if c["human_decision"]["found"])
     print(f"  back-half runs: {n_back}/{len(candidates)}")
     print(f"  visual reviews: {n_vis}/{len(candidates)}")
-    print(f"  Jev annotations: {n_jev}/{len(candidates)}")
     print(f"  human decisions: {n_hum}/{len(candidates)}")
 
     run_missing = run_meta.get("missing_links") or []

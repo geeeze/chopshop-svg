@@ -120,8 +120,6 @@ def make_run(tmp_path, *, duplicate=False):
     _write(rr.FINAL_DIR / "candidate_01.print.pdf", b"%PDF")
     _write(rr.FINAL_DIR / "candidate_01.layer_b.txt", "layer b")
     _write(rr.VALIDATED_DIR / "candidate_01.layer_a.txt", "layer a")
-    fc.write_json(rr.FINAL_DIR / "candidate_01.jev.json",
-                  {"status": "ok", "schema": "chopshop-jev-annotation-0.3"})
     fc.write_json(rr.FINAL_DIR / "candidate_01.pick.json",
                   {"selected": True, "label": "production", "reason": "clean"})
     _write(rr.FINAL_DIR / "candidate_01.visual_review.md", "# review")
@@ -141,7 +139,7 @@ def test_build_run_stitches_source_and_sweep(tmp_path):
     assert run["run"]["missing_links"] == []
 
 
-def test_build_run_candidates_carry_back_half_and_jev(tmp_path):
+def test_build_run_candidates_carry_back_half_and_review(tmp_path):
     _, stem, _ = make_run(tmp_path)
     run = rr.build_run(stem)
     c01 = next(c for c in run["candidates"] if c["id"] == "candidate_01")
@@ -149,7 +147,6 @@ def test_build_run_candidates_carry_back_half_and_jev(tmp_path):
 
     assert c01["back_half"]["run"] is True
     assert c01["back_half"]["manifest"]["stats"]["tac_exact"] is True
-    assert c01["jev"]["status"] == "ok"
     assert c01["human_decision"]["label"] == "production"
     assert c01["visual_review"]["found"] is True
     assert c01["comparison"]["passed"] is True

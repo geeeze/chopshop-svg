@@ -202,7 +202,6 @@ chopshop-svg/
 │   ├── trace_sweep.py         # front: multi-pass VTracer candidate sweep
 │   ├── compare_candidates.py  # front: run every candidate through A + B
 │   ├── pick_finish.py         # front: --loop menu driver
-│   ├── jev_annotate.py        # OPTIONAL: Jev decision sidecar (needs API key)
 │   ├── run_record.py          # provenance spine: stitch a run into 06_run/<stem>.run.json
 │   ├── closeout.py            # pass/fail board per candidate vs requirements.json
 │   ├── FRONT_HALF.md          # front-half documentation
@@ -210,25 +209,6 @@ chopshop-svg/
 ├── tests/                     # pytest suite (synthetic fixtures only)
 ├── 00_source/                 # example raster/SVG batch for the back half
 └── 01_prepped/ 02_traced/ 04_validated/ 05_final/ 06_run/   # generated (gitignored)
-```
-
----
-
-## Optional add-on: Jev decision sidecar
-
-`scripts/jev_annotate.py` is **not** part of the pipeline — `pipeline.sh` and
-`compare_candidates.py` never call it. It is an opt-in helper that projects a
-preflight manifest into a compact summary and asks an external decision service
-four advisory questions, writing a separate `<stem>.jev.json` sidecar. It never
-modifies the manifest and never picks a winner.
-
-It needs an API key and a network round-trip, so it is off by default and
-degrades gracefully without either:
-
-```bash
-.venv/bin/python scripts/jev_annotate.py 05_final/art.manifest.json --dry-run   # no key/network
-.venv/bin/python scripts/jev_annotate.py 05_final/art.manifest.json --optional  # skip, exit 0
-TYPESAFE_API_KEY=... .venv/bin/python scripts/jev_annotate.py 05_final/art.manifest.json  # live
 ```
 
 ---
@@ -247,7 +227,7 @@ record, and `scripts/closeout.py` prints the pass/fail board against
 ```
 
 `run_record.py` joins, per candidate: source hash → prep → sweep entry →
-SVG hash → Layer A/B → proof/PDF → Jev sidecar → human decision, flagging
+SVG hash → Layer A/B → proof/PDF → human decision, flagging
 every missing link. `closeout.py` then checks each candidate against the
 requirements matrix and never stops at the first failure.
 
