@@ -1,0 +1,61 @@
+{
+  "_comment": "Requirements matrix: one row per requirement, its source, and how closeout.py checks it. Category separates hard production requirements from style objectives from bookkeeping, so a candidate can fail production yet still succeed as a style reference. This is DATA, not code -- edit rows to match a job; closeout.py reads it. Check types closeout.py understands: layer_a_passed, layer_b_passed, back_half_passed, tac_exact, no_continuous_tone, rendered_colors_le (value N), node_max_le (value N), vtracer_only, unique, visual_review_present, human_decision_present.",
+  "requirements": [
+    {
+      "id": "R-01",
+      "requirement": "source remains recognizable in the trace",
+      "source": "user brief",
+      "category": "style",
+      "check": {"type": "visual_review_present"}
+    },
+    {
+      "id": "R-02",
+      "requirement": "no embedded raster or source-level violation in final SVG",
+      "source": "print contract",
+      "category": "production",
+      "check": {"type": "layer_a_passed"}
+    },
+    {
+      "id": "R-03",
+      "requirement": "rendered colour count within the contract budget",
+      "source": "spec.json print colour budget",
+      "category": "production",
+      "check": {"type": "rendered_colors_le", "value": 6}
+    },
+    {
+      "id": "R-04",
+      "requirement": "no continuous tone (flat spot inks only)",
+      "source": "spec.json",
+      "category": "production",
+      "check": {"type": "no_continuous_tone"}
+    },
+    {
+      "id": "R-05",
+      "requirement": "candidate preserves the intended engraving/style character",
+      "source": "style goal",
+      "category": "style",
+      "check": {"type": "visual_review_present"}
+    },
+    {
+      "id": "R-06",
+      "requirement": "TAC is exact before production approval",
+      "source": "printer requirement",
+      "category": "production",
+      "check": {"type": "tac_exact"}
+    },
+    {
+      "id": "R-07",
+      "requirement": "trace was produced by VTracer only (no LLM-generated SVG)",
+      "source": "project constraint",
+      "category": "bookkeeping",
+      "check": {"type": "vtracer_only"}
+    },
+    {
+      "id": "R-08",
+      "requirement": "candidate is not a SHA duplicate of another candidate",
+      "source": "sweep quality",
+      "category": "bookkeeping",
+      "check": {"type": "unique"}
+    }
+  ]
+}

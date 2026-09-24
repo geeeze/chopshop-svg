@@ -10,6 +10,7 @@ __pycache__/
 03_cleaned/
 04_validated/
 05_final/
+06_run/
 .preflight-work/
 00_source/preflight/
 *.proof.png

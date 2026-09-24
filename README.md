@@ -203,10 +203,13 @@ chopshop-svg/
 │   ├── compare_candidates.py  # front: run every candidate through A + B
 │   ├── pick_finish.py         # front: --loop menu driver
 │   ├── jev_annotate.py        # OPTIONAL: Jev decision sidecar (needs API key)
+│   ├── run_record.py          # provenance spine: stitch a run into 06_run/<stem>.run.json
+│   ├── closeout.py            # pass/fail board per candidate vs requirements.json
 │   ├── FRONT_HALF.md          # front-half documentation
+├── requirements.json          # requirements matrix (R-NN | requirement | source | check)
 ├── tests/                     # pytest suite (synthetic fixtures only)
 ├── 00_source/                 # example raster/SVG batch for the back half
-└── 01_prepped/ 02_traced/ 04_validated/ 05_final/   # generated (gitignored)
+└── 01_prepped/ 02_traced/ 04_validated/ 05_final/ 06_run/   # generated (gitignored)
 ```
 
 ---
@@ -227,6 +230,39 @@ degrades gracefully without either:
 .venv/bin/python scripts/jev_annotate.py 05_final/art.manifest.json --optional  # skip, exit 0
 TYPESAFE_API_KEY=... .venv/bin/python scripts/jev_annotate.py 05_final/art.manifest.json  # live
 ```
+
+---
+
+## Run record + closeout (the archive spine)
+
+`scripts/run_record.py` stitches one front-half run into a single provenance
+record, and `scripts/closeout.py` prints the pass/fail board against
+`requirements.json`. Neither runs the pipeline, neither picks a winner.
+
+```bash
+.venv/bin/python scripts/run_record.py --all                # every run under 02_traced/
+.venv/bin/python scripts/run_record.py --stem 00-example    # one run -> 06_run/00-example.run.json
+.venv/bin/python scripts/closeout.py 06_run/00-example.run.json            # board; exit 1 if incomplete
+.venv/bin/python scripts/closeout.py 06_run/00-example.run.json --no-gate   # just read the board
+```
+
+`run_record.py` joins, per candidate: source hash → prep → sweep entry →
+SVG hash → Layer A/B → proof/PDF → Jev sidecar → human decision, flagging
+every missing link. `closeout.py` then checks each candidate against the
+requirements matrix and never stops at the first failure.
+
+The matrix in `requirements.json` separates three things that are otherwise
+easy to conflate: **hard production requirements** (Layer A/B, colour budget,
+continuous tone, exact TAC), **style objectives** (recognizability, engraving
+character — these need a human/visual review), and **bookkeeping** (VTracer
+only, no SHA duplicates). A candidate can fail production yet still be worth
+keeping as a style reference.
+
+The human decision + visual review are recorded by convention (both optional,
+both flagged as missing links until they exist):
+
+- `05_final/<candidate>.pick.json` — `{"selected": true, "label": "production|style_reference|needs_retrace|discard", "reason": "..."}`
+- `05_final/<candidate>.visual_review.md` — the visual-inspection report
 
 ---
 
