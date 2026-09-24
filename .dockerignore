@@ -1,0 +1,23 @@
+# Keep the build context lean — the image only needs code + tests + deps.
+# Inputs/outputs are bind-mounted at runtime, not copied in.
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+
+# Generated artifacts (rebuilt/mounted at runtime)
+scratch
+01_prepped
+02_traced
+03_cleaned
+04_validated
+05_final
+.preflight-work
+00_source/preflight
+
+# Editor droppings
+*.swp
+*.kate-swp
+*~

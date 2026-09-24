@@ -1,0 +1,68 @@
+{
+  "acceptable": true,
+  "already_vector": false,
+  "checks": [
+    {
+      "check": "format",
+      "detail": "raster .png -- tracing applies",
+      "status": "pass"
+    },
+    {
+      "check": "color_mode",
+      "detail": "RGB",
+      "status": "pass"
+    },
+    {
+      "check": "alpha",
+      "detail": "opaque (no alpha channel)",
+      "status": "pass"
+    },
+    {
+      "check": "geometry",
+      "detail": "source is 1024x1024px (aspect 1.000), 86.7x86.7mm at 300 dpi; no size prescribed in the spec, so nothing is enforced",
+      "status": "info"
+    },
+    {
+      "check": "color_count",
+      "detail": "~21915 unique colours (photo-like); many colours trace to many paths/inks",
+      "status": "info"
+    },
+    {
+      "check": "background",
+      "detail": "border varies (std 42.5) -- full-bleed or photographic; background removal may be needed before tracing",
+      "status": "warn"
+    }
+  ],
+  "generated": "2026-09-24T04:04:19+00:00",
+  "input": {
+    "ext": ".png",
+    "file": "00_source/00-example.png",
+    "mode": "RGB",
+    "sha256": "f71ae6afa811500082c55499ed3dc03dbc6dc0f36e271ae8c83a9daf214cfed0",
+    "size_bytes": 2297410,
+    "size_px": [
+      1024,
+      1024
+    ]
+  },
+  "mode": "check",
+  "notes": [],
+  "output": {
+    "container": "png",
+    "file": "/home/monop/davesnothere/01_prepped/00-example.prepped.png",
+    "sha256": "f71ae6afa811500082c55499ed3dc03dbc6dc0f36e271ae8c83a9daf214cfed0",
+    "size_bytes": 2297410,
+    "size_px": [
+      1024,
+      1024
+    ],
+    "unchanged": true
+  },
+  "tool": "prep_raster.py",
+  "versions": {
+    "pillow": "12.3.0",
+    "pngquant": "2.18.0 (January 2023)",
+    "realesrgan": null,
+    "rembg": null
+  }
+}

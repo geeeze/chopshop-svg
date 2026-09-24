@@ -1,0 +1,10 @@
+NOTE: document is 270.93mm wide but declares no viewBox, so all lengths are read as CSS px (1px = 0.2646mm)
+VALIDATION FAILED for 02_traced/00-example/candidate_08.svg:
+ - [COLOR_COUNT]: Color count 7379 exceeds max 6 (used: #000000, #000500, #000800, #000900, #000d00, #000e00, #001100, #001300, #001500, #001700, #001900, #001c00, #001e00, #001f00, #002700, #002e00, #002f00, #003300, #003800, #040000, #050000, #060000, #060600, #061400, #070000, #070700, #080000, #080800, #080808, #090000, #090303, #090900, #090909, #091b09, #0a0000, #0a0500, #0a0a00, #0a0a0a, #0b0000, #0b0200, #0b0b00, #0b0b0b, #0b1600, #0b160b, #0c0 ...)
+ - [NODE_COUNT]: Path #4 (no id) has 2240 nodes, above the limit of 500 (heavily traced paths slow the RIP and cannot be hand-edited)
+ - [NODE_COUNT]: Path #2 (no id) has 2178 nodes, above the limit of 500 (heavily traced paths slow the RIP and cannot be hand-edited)
+ - [NODE_COUNT]: Path #3 (no id) has 1649 nodes, above the limit of 500 (heavily traced paths slow the RIP and cannot be hand-edited)
+ - [NODE_COUNT]: Path #6 (no id) has 1612 nodes, above the limit of 500 (heavily traced paths slow the RIP and cannot be hand-edited)
+ - [NODE_COUNT]: Path #5 (no id) has 1233 nodes, above the limit of 500 (heavily traced paths slow the RIP and cannot be hand-edited)
+ - [NODE_COUNT]: ...and 8 more paths over the 500-node limit (worst: Path #4 (no id) with 2240 nodes)
+ - [PALETTE]: 7375 declared colours not in the spec palette: #000500, #000800, #000900, #000d00, #000e00, #001100, #001300, #001500, #001700, #001900 (palette: #000000, #ffffff, #ff0000, #0000ff, #ffff00, #00ff00)

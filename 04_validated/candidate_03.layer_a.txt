@@ -1,0 +1,6 @@
+NOTE: document is 270.93mm wide but declares no viewBox, so all lengths are read as CSS px (1px = 0.2646mm)
+VALIDATION FAILED for 02_traced/00-example/candidate_03.svg:
+ - [COLOR_COUNT]: Color count 3748 exceeds max 6 (used: #58514b, #595551, #595552, #5a5555, #5a5651, #5a5753, #5b554e, #5b5550, #5c584f, #5d5855, #5e5953, #5f2a2c, #5f3c38, #5f5853, #5f5952, #5f5953, #5f5a53, #605a54, #605c56, #61433f, #615b56, #615c54, #615d5a, #622e2d, #625a52, #625b56, #625e58, #625f58, #632f2d, #63332d, #635a57, #635c58, #635e56, #64292a, #645a57, #645c58, #645d59, #645e58, #645e59, #645f5a, #64615b, #655d57, #655d5b, #656058, #662 ...)
+ - [NODE_COUNT]: Path #1 (no id) has 969 nodes, above the limit of 500 (heavily traced paths slow the RIP and cannot be hand-edited)
+ - [NODE_COUNT]: Path #2 (no id) has 509 nodes, above the limit of 500 (heavily traced paths slow the RIP and cannot be hand-edited)
+ - [PALETTE]: 3748 declared colours not in the spec palette: #58514b, #595551, #595552, #5a5555, #5a5651, #5a5753, #5b554e, #5b5550, #5c584f, #5d5855 (palette: #000000, #ffffff, #ff0000, #0000ff, #ffff00, #00ff00)

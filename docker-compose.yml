@@ -1,0 +1,29 @@
+# chopshop-svg — run the pipeline anywhere with Docker (or podman-compose).
+#
+# Build once:
+#   docker compose build
+#
+# Run the back half on one SVG (outputs land in ./04_validated and ./05_final):
+#   docker compose run --rm chopshop ./pipeline.sh 00_source/art.svg
+#
+# Run the front half on a raster (candidates in ./02_traced, report in ./04_validated):
+#   docker compose run --rm chopshop ./front_pipeline.sh 00_source/art.png
+#
+# With podman instead of docker: `podman compose` (podman-compose) understands
+# this same file.
+
+services:
+  chopshop:
+    build: .
+    image: chopshop-svg:0.1.0
+    working_dir: /app
+    # Bind-mount inputs, the spec, and the output dirs so results land on the
+    # host. The code and venv are baked into the image, not mounted.
+    volumes:
+      - ./00_source:/app/00_source
+      - ./spec.json:/app/spec.json
+      - ./01_prepped:/app/01_prepped
+      - ./02_traced:/app/02_traced
+      - ./03_cleaned:/app/03_cleaned
+      - ./04_validated:/app/04_validated
+      - ./05_final:/app/05_final

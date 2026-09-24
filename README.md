@@ -1,0 +1,250 @@
+# chopshop-svg · v0.1.0
+
+Turn a raster image into print-ready vector art — automatically.
+
+**chopshop-svg** is a T-shirt print pipeline. You give it a picture (a logo, a
+scan, a photo, an AI-generated image); it produces a set of traced vector
+candidates, measures each one against the rules a real screen-printer cares
+about (colour count, node weight, stroke thickness, coverage), and shows you the
+trade-offs. **It never picks a winner** — tracing quality is a visual judgment,
+so a human chooses from the candidates and metrics the pipeline lays out.
+
+The project is two halves that you use in sequence:
+
+1. **Front half** — raster → vector candidates. `front_pipeline.sh` runs prep →
+   trace sweep → comparison. You look at the report, pick a candidate by eye.
+2. **Back half** — vector → print check. `pipeline.sh` runs the chosen candidate
+   through two independent gates (source-level *Layer A*, rendered *Layer B*)
+   and produces a proof image, a print PDF, and a JSON manifest.
+
+---
+
+## Quick start
+
+```bash
+cd chopshop-svg
+
+# 1. create a virtual environment and install the Python dependencies
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+
+# 2. make sure the system tools are present (see "System tools" below)
+command -v inkscape gs qpdf
+
+# 3. trace a raster into candidates and get a comparison report
+./front_pipeline.sh artwork.png
+
+# 4. read the report, choose a candidate, then validate it for print
+./pipeline.sh 02_traced/artwork/candidate_04.svg
+```
+
+That's the whole workflow. The `--loop` flag turns step 3–4 semi-interactive:
+after the comparison it prints a menu, you pick up to 3 candidates, and it runs
+the back half on each in turn:
+
+```bash
+./front_pipeline.sh artwork.png --loop
+```
+
+### What the comparison report tells you
+
+`04_validated/artwork.comparison.md` is the report. For every candidate it lists:
+
+- the exact tracing parameters that produced it (reproducible),
+- **Layer A / Layer B** pass-or-fail plus the specific findings,
+- declared colours, rendered ink count, node count (total and heaviest path), file size,
+- a **pixel-fidelity** score (how close the trace is to the original raster),
+- a summary of hard gates failed and advisories raised.
+
+Candidates are sorted by *fewest hard failures, then fewest advisories* — and
+nothing more. The pixel-fidelity ranking is shown separately as a second lens.
+Pick what looks right for your job.
+
+---
+
+## System tools (not Python — install via your OS)
+
+| Tool | Needed by | Status |
+|---|---|---|
+| Inkscape | render the SVG to a proof PNG + fidelity diff (back + front half) | **required** |
+| Ghostscript (`gs`) | PDF colour separation in Layer B | **required** |
+| qpdf | PDF inspection in Layer B | **required** |
+| VTracer | raster → vector tracing (front half) | in `requirements.txt` |
+| pngquant | optional colour quantisation in prep | optional — skipped if absent |
+| rembg | optional background removal in prep | optional — skipped if absent |
+| realesrgan-ncnn-vulkan | optional higher-quality upscale in prep | optional — skipped if absent |
+| SVGO (Node.js) | optional SVG cleanup (see `scripts/svgo_print.yml`) | optional — this host has no Node |
+
+Debian/Ubuntu one-liner for the required tools:
+
+```bash
+sudo apt-get install inkscape ghostscript qpdf
+```
+
+### Optional tools (install only if you want that prep step)
+
+Each of these is *skippable* — if absent, the step logs a warning and is
+recorded in the sidecar, and the pipeline still runs. Install commands verified
+against the current releases:
+
+```bash
+# colour quantisation in prep (--fix), to spec.print.prep_colors
+sudo apt-get install pngquant              # Debian/Ubuntu (v2.18 in trixie)
+#   or: brew install pngquant              # macOS
+
+# background removal in prep (--fix).  rembg 2.x ships NO CLI binary, and its
+# ML backend (onnxruntime) lives in the [cpu] extra, not [cli] — so install the
+# cpu extra and the pipeline drives it through the Python module:
+.venv/bin/pip install 'rembg[cpu]'
+
+# higher-quality upscale in prep (--fix); falls back to Pillow LANCZOS if absent
+#   download a release binary from https://github.com/xinntao/Real-ESRGAN
+#   (the "realesrgan-ncnn-vulkan" asset) and put it on your PATH
+```
+
+Everything optional degrades gracefully: if a tool is missing, that step is
+skipped, a warning is logged, and the skip is recorded in the JSON sidecar —
+the pipeline still produces candidates and metrics. The one hard requirement on
+the front half is a tracer (VTracer, via `requirements.txt`).
+
+---
+
+## The job contract (`spec.json`)
+
+The whole pipeline is driven by one JSON file, `spec.json` (start from
+`spec.example.json`). It is the single statement of what "printable" means for
+a job: the colour budget, the geometry limits, the tolerances, and the
+front-half prep/trace behaviour. Every gate in Layer A and Layer B reads from
+it; any key you omit falls back to its default below.
+
+### Top-level keys
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `print_method` | string | `""` | e.g. `screen_print`, `dtg`, `vinyl`. Drives a few derived defaults (e.g. open-path tolerance). |
+| `max_colors` | int | *(none)* | Colour budget — Layer A hard gate (declared colours must not exceed it). |
+| `palette` | string[] | *(none)* | The expected palette as `#rrggbb`; Layer A checks the artwork's colours against it. Also the front half's palette axis. |
+| `require_cmyk` | bool | `false` | Require genuine CMYK source (a PDF/ICC reading) rather than an RGB-derived estimate. |
+| `icc_profile_path` | string | `null` | ICC profile for colour separation; falls back to a bundled press profile when absent or missing. |
+| `ink_limit_percent` | number | `300` | Total area coverage (TAC) limit, percent. |
+| `dimensions` | object | *(absent)* | `{width_mm, height_mm}` — physical size. **Absent = the size gate is skipped** (no size/orientation prescription); present = real gate. |
+| `geometry` | object | — | See below. |
+| `validation` | object | — | See below. |
+| `print` | object | — | See below (most knobs live here). |
+
+### `geometry`
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `min_stroke_width_pt` | number | *(none)* | Minimum stroke width; thinner strokes are a hard finding. |
+| `max_nodes_per_path` | int | *(none)* | Node-count limit per path (trace weight / RIP load). |
+| `allow_raster_embed` | bool | `false` | Whether `<image>` raster embeds are permitted (default bans them). |
+| `allow_gradients` | bool | `false` | Whether gradients / continuous tone are allowed. Also gates the front half's `photo` preset. |
+| `allow_open_paths` | bool | `true` | Whether open (unclosed) paths are acceptable. |
+| `gradient_handling` | string | `""` | How gradients are treated: `vector_halftone`, `embedded_raster`, etc. |
+| `halftone_handling` | string | `""` | How halftones are treated. |
+
+### `validation`
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `run_preflight` | bool | `true` | Whether `pipeline.sh` runs Layer B (render preflight) at all. |
+| `flag_on_any_failure` | bool | `true` | Any hard finding fails the job. |
+| `auto_retry_limit` | int | `3` | Retry budget (used by the back-half runner). |
+
+### `print`
+
+The render-preflight tolerances and the front-half prep/trace defaults.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `dpi` | number | `300` | Render/measurement DPI. |
+| `min_image_ppi` | number | `300` | Minimum effective PPI for placed bitmaps. |
+| `ink_area_threshold_percent` | number | `0.05` | A colour must cover this share of the sheet to count as an ink (drops anti-alias fringe). |
+| `ink_merge_tolerance` | number | `20` | Colours closer than this (Euclidean sRGB, max 441) merge into one ink. |
+| `ramp_min_members` | int | `6` | A merged ink built from ≥ this many colours is treated as a gradient/ramp. |
+| `count_white_as_ink` | bool | `false` | Count pure white as an ink (default excludes it, assuming white substrate). |
+| `dark_garment_underbase` | bool | `false` | Dark-garment underbase: implies `count_white_as_ink` (white = the underbase screen). |
+| `require_embedded_fonts` | bool | `false` | Font substitution is advisory unless this is set. |
+| `assume_opaque_bg` | bool | `false` | *Front half* — skip background removal in prep. |
+| `prep_colors` | int \| null | `16` | *Front half* — pngquant colour budget in prep; `null` disables quantisation. |
+| `background_hex` | string | `"#ffffff"` | *Front half* — colour to flatten alpha onto before tracing. |
+| `sweep_max_candidates` | int | `12` | *Front half* — cap on the number of traced candidates. |
+
+### Notes
+
+- **Size/orientation is not prescribed by default.** With no `dimensions` block,
+  the size gate is skipped and prep reports the source's own dimensions as
+  information. Add `dimensions` only for a job with a fixed print size.
+- **`spec.json` is the active contract; `spec.example.json` is the annotated
+  starting point.** Copy the example and edit, or merge a fragment over it —
+  the loaders merge over defaults, so a minimal spec is fine.
+- The front half owns the four `print.*` keys marked *Front half* above; the
+  rest belong to the back half. See `scripts/FRONT_HALF.md` for the front-half
+  specifics.
+
+---
+
+## Layout
+
+```
+chopshop-svg/
+├── front_pipeline.sh          # FRONT half orchestrator: prep → sweep → compare
+├── pipeline.sh                # BACK half: validate + preflight a chosen SVG
+├── validate_svg.py            # Layer A — source-level SVG checks
+├── preflight.py               # Layer B — render + colour/ink/coverage checks
+├── snap_colors.py             # snap a trace's colours to a palette
+├── run_batch.py               # batch-run the back half over a folder
+├── spec.json                  # the active job contract (see spec.example.json)
+├── requirements.txt           # Python dependencies (required + optional)
+├── scripts/
+│   ├── prep_raster.py         # front: check/normalise a raster (--fix to modify)
+│   ├── trace_sweep.py         # front: multi-pass VTracer candidate sweep
+│   ├── compare_candidates.py  # front: run every candidate through A + B
+│   ├── pick_finish.py         # front: --loop menu driver
+│   ├── jev_annotate.py        # OPTIONAL: Jev decision sidecar (needs API key)
+│   ├── FRONT_HALF.md          # front-half documentation
+├── tests/                     # pytest suite (synthetic fixtures only)
+├── 00_source/                 # example raster/SVG batch for the back half
+└── 01_prepped/ 02_traced/ 04_validated/ 05_final/   # generated (gitignored)
+```
+
+---
+
+## Optional add-on: Jev decision sidecar
+
+`scripts/jev_annotate.py` is **not** part of the pipeline — `pipeline.sh` and
+`compare_candidates.py` never call it. It is an opt-in helper that projects a
+preflight manifest into a compact summary and asks an external decision service
+four advisory questions, writing a separate `<stem>.jev.json` sidecar. It never
+modifies the manifest and never picks a winner.
+
+It needs an API key and a network round-trip, so it is off by default and
+degrades gracefully without either:
+
+```bash
+.venv/bin/python scripts/jev_annotate.py 05_final/art.manifest.json --dry-run   # no key/network
+.venv/bin/python scripts/jev_annotate.py 05_final/art.manifest.json --optional  # skip, exit 0
+TYPESAFE_API_KEY=... .venv/bin/python scripts/jev_annotate.py 05_final/art.manifest.json  # live
+```
+
+---
+
+## Tests
+
+```bash
+.venv/bin/python -m pytest tests/
+```
+
+The suite uses synthetic images generated in-test (Pillow), never the real
+artwork, so it runs anywhere without the `00_source/` batch.
+
+---
+
+## More reading
+
+- `OVERVIEW.md` — the design and the reasoning behind the two-layer gate.
+- `HOWTO-print-check.md` — deeper walkthrough of the print-check concepts.
+- `scripts/FRONT_HALF.md` — the front half in detail (sweep, fidelity metric,
+  parallelism).
+- `AGENTS.md` — handoff notes for an AI agent (GPT/Hermes/etc.) picking this up.

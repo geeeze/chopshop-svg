@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100px" height="100px">
+  <!-- VIOLATION 1: Embedded raster (when allow_raster_embed is false) -->
+  <image href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" width="10" height="10"/>
+
+  <!-- VIOLATION 2: Hairline stroke (0.1pt, below typical 1.5pt min) -->
+  <path d="M 10 10 L 90 90" stroke="#FF0000" stroke-width="0.1pt" fill="none"/>
+
+  <!-- VIOLATION 3: Open path (fails if print_method is vinyl/plotter) -->
+  <path d="M 20 20 L 80 80" stroke="#0000FF" stroke-width="2pt" fill="none"/>
+
+  <!-- VIOLATION 4: Exceeds max_colors (7 distinct fills, spec usually allows 6) -->
+  <rect x="0" y="0" width="10" height="10" fill="#000000"/>
+  <rect x="10" y="0" width="10" height="10" fill="#FFFFFF"/>
+  <rect x="20" y="0" width="10" height="10" fill="#FF0000"/>
+  <rect x="30" y="0" width="10" height="10" fill="#00FF00"/>
+  <rect x="40" y="0" width="10" height="10" fill="#0000FF"/>
+  <rect x="50" y="0" width="10" height="10" fill="#FFFF00"/>
+  <rect x="60" y="0" width="10" height="10" fill="#00FFFF"/>
+</svg>

@@ -1,0 +1,38 @@
+# chopshop-svg — Python dependencies
+# Install with:  .venv/bin/pip install -r requirements.txt
+# (create the venv first:  python3 -m venv .venv)
+
+# --- required: the pipeline will not run without these ---
+lxml==6.1.3            # SVG XML parsing (validate_svg.py, compare_candidates.py)
+svgpathtools==1.8.0    # SVG path geometry (node counts, stroke-width checks)
+Pillow==12.3.0         # raster load/save, palette quantisation, proof rendering
+numpy==2.5.3           # pixel maths (fidelity metric, nearest-colour search)
+vtracer==0.6.15        # raster -> vector tracing (the core of the sweep)
+
+# --- dev/test (not needed to run the pipeline) ---
+pytest==9.1.1          # test suite (tests/)
+pyflakes==3.4.0        # static lint used by the CI-style checks in this repo
+
+# ---------------------------------------------------------------------------
+# Optional, install on demand.  Each step that uses one of these skips
+# gracefully (logs a warning, records it in the sidecar) when it is absent.
+#
+#   background removal (module-only — rembg 2.x ships no CLI binary, and the
+#   ML backend onnxruntime is in the [cpu] extra, NOT [cli]):
+#       .venv/bin/pip install 'rembg[cpu]'
+#   higher-quality upscaling (falls back to Pillow LANCZOS):
+#       realesrgan-ncnn-vulkan   (a binary from github.com/xinntao/Real-ESRGAN)
+#   colour quantisation (pngquant):
+#       sudo apt-get install pngquant      # Debian/Ubuntu
+#       brew install pngquant              # macOS
+# ---------------------------------------------------------------------------
+
+# --- system tools the pipeline shells out to (NOT pip; install via your OS) ---
+#   inkscape    required — renders SVGs to raster for the proof + fidelity diff
+#   ghostscript (gs)  required — PDF colour separation in Layer B (preflight.py)
+#   qpdf        required — PDF inspection in preflight.py
+#   poppler-utils required — pdfinfo + pdfimages (image resolution, colour space)
+#   potrace     referenced in docs only
+#
+#   Debian/Ubuntu:  sudo apt-get install inkscape ghostscript qpdf poppler-utils potrace
+#   Check:  command -v inkscape gs qpdf pdfinfo pdfimages

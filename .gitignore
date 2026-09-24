@@ -1,0 +1,24 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Generated artifacts -- the pipeline rebuilds all of these
+01_prepped/
+02_traced/
+03_cleaned/
+04_validated/
+05_final/
+.preflight-work/
+00_source/preflight/
+*.proof.png
+*.print.pdf
+
+# User scratch rasters (kept out of the tracked 00_source/ batch)
+scratch/
+
+# Editor swap/backup files
+*.swp
+*.kate-swp
+*~

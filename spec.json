@@ -1,0 +1,40 @@
+{
+  "print_method": "screen_print",
+  "color_space": "pantone",
+  "max_colors": 6,
+  "require_cmyk": false,
+  "icc_profile_path": null,
+  "ink_limit_percent": 300,
+  "geometry": {
+    "min_stroke_width_pt": 1.5,
+    "max_nodes_per_path": 500,
+    "allow_raster_embed": false,
+    "allow_gradients": false,
+    "allow_open_paths": true,
+    "gradient_handling": "vector_halftone",
+    "halftone_handling": "vector_halftone"
+  },
+  "palette": [
+    "#000000",
+    "#FFFFFF",
+    "#FF0000",
+    "#0000FF",
+    "#FFFF00",
+    "#00FF00"
+  ],
+  "validation": {
+    "auto_retry_limit": 3,
+    "flag_on_any_failure": true,
+    "run_preflight": true
+  },
+  "print": {
+    "dpi": 300,
+    "min_image_ppi": 300,
+    "require_embedded_fonts": false,
+    "ink_area_threshold_percent": 0.05,
+    "ink_merge_tolerance": 20,
+    "ramp_min_members": 6,
+    "count_white_as_ink": true,
+    "dark_garment_underbase": true
+  }
+}

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="300mm" height="400mm" viewBox="0 0 300 400">
+  <rect width="300" height="400" fill="#FFFFFF"/>
+  <image id="photo" x="50" y="70" width="200" height="266"
+         xlink:href="photo.png" preserveAspectRatio="none"/>
+  <path id="caption" d="M60,350 L240,350 L240,375 L60,375 Z" fill="#000000"/>
+</svg>

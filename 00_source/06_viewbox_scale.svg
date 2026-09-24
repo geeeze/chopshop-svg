@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="300mm" height="400mm" viewBox="0 0 300 400">
+  <rect width="300" height="400" fill="#FFFFFF"/>
+  <path id="outline" d="M30,30 L270,30 L270,370 L30,370 Z" fill="#FFFFFF"
+        stroke="#000000" stroke-width="1"/>
+  <circle id="dot" cx="150" cy="200" r="70" fill="#0000FF"/>
+</svg>
