@@ -2,10 +2,10 @@
 #
 # Usage:  svgo --config scripts/svgo_print.yml -i 02_traced/attempt_01/x.svg -o 03_cleaned/x.svg
 #
-# NOTE: SVGO needs Node.js, which this host does not have. The equivalent
-# pure-Python step ships as scripts/snap_colors.py; this config is here so the
-# SVGO half of stage 3 can run wherever node is available. The plugins below are
-# the ones that matter for print and are safe for traced artwork -- anything
+# NOTE: SVGO needs a Node.js runtime. The equivalent pure-Python step ships as
+# scripts/snap_colors.py; this config is here so the SVGO half of stage 3 can run
+# wherever node is available. The plugins below are the ones that matter for
+# print and are safe for traced artwork -- anything
 # that merges or rewrites geometry is deliberately left out, because re-flowing
 # paths is how clean contours become subtle artefacts.
 plugins:

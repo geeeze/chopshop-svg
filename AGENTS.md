@@ -68,20 +68,20 @@ on each pick, loop for more picks or quit.
 - **Tests use synthetic in-test fixtures only.** Never depend on the real
   `00_source/` batch in a test.
 
-## Environment facts (this box)
+## Environment facts
 
-- **Built on Debian 13 (trixie), x86_64** — a stock Debian 13 apt repo, so
-  system tools install via `apt` and Python deps via `pip`. The same stack runs
-  unmodified on any Debian-13-family host; see "Deployment / container" below
-  for the run-anywhere image.
-- Interpreter: `.venv/bin/python` (the venv under the repo root). PEP 668 host,
-  so always go through the venv. Python 3.13.
-- **No Node.js/npm** on this host. `scripts/svgo_print.yml` is an SVGO config
-  that cannot run here; it is kept for hosts that have node, and the pure-Python
-  equivalent is `snap_colors.py`. Do not assume node is available.
-- Required system tools **are present**: Inkscape 1.4, Ghostscript (`gs`), qpdf,
-  poppler-utils (`pdfinfo`/`pdfimages`), potrace. Optional prep tools are
-  **absent** and must stay skippable: pngquant, rembg, realesrgan-ncnn-vulkan.
+- **Target platform: Debian 13-family (x86_64).** System tools install via
+  `apt`, Python deps via `pip`; see "Deployment / container" below for the
+  run-anywhere image.
+- **Python 3.13 through a repo-root venv** (`.venv/bin/python`). On PEP 668
+  hosts a bare `pip install` is refused, so always go through the venv.
+- **Do not assume a Node.js runtime.** `scripts/svgo_print.yml` is an SVGO
+  config for hosts that do have one; the pure-Python equivalent is
+  `snap_colors.py`, and nothing in the pipeline requires Node.
+- **Required system tools:** Inkscape 1.4+, Ghostscript (`gs`), qpdf,
+  poppler-utils (`pdfinfo`/`pdfimages`), potrace.
+- **Optional prep tools** must stay skippable when absent: pngquant, rembg,
+  realesrgan-ncnn-vulkan.
 - Tracer: the `vtracer` PyPI wheel (`0.6.15`) is the Python-API-only build — **no
   `vtracer` CLI on PATH, and no `gradient_step` parameter**. The standalone CLI
   has `--help` and more flags; the pip API's available params come from
@@ -127,8 +127,9 @@ sequential fallback — a pool failure must never break a stage.
 
 The full stack (Python venv + Inkscape 1.4 + Ghostscript + qpdf + potrace) is
 packaged as a container so it can run on any Docker/podman host with zero host
-installs. Files: `Dockerfile` (Debian 13 base, mirrors this box), `docker-compose.yml`
-(bind-mounts inputs + outputs), `.dockerignore` (keeps the build context lean).
+installs. Files: `Dockerfile` (Debian 13 base, matching the tested deployment),
+`docker-compose.yml` (bind-mounts inputs + outputs), `.dockerignore` (keeps the
+build context lean).
 
 ```bash
 docker compose build                                   # once
@@ -139,10 +140,10 @@ docker compose run --rm chopshop ./front_pipeline.sh 00_source/art.png # front h
 - The code and venv are **baked into the image**; only `00_source/`, `spec.json`,
   and the `01_prepped/…05_final/` output dirs are bind-mounted, so results land
   on the host.
-- `podman compose` / `podman-compose` understand the same file. This box has
-  **podman but no Docker daemon**, so the image was verified with
-  `podman build` + `podman run` (the `docker-compose` binary here targets a
-  daemon that isn't present — use podman directly).
+- `podman compose` / `podman-compose` understand the same file, so the image
+  runs under either runtime. With podman, drive it directly
+  (`podman build` + `podman run`) if a `docker-compose` binary on the machine
+  targets a daemon that is not running.
 - Inkscape in the container runs headless with `DBUS_SESSION_BUS_ADDRESS=disabled:`
   (already set by `front_common.py` for parallel workers); give it a writable
   `HOME` (the image sets `HOME=/root`).

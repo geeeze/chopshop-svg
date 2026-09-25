@@ -4,7 +4,7 @@
 snap_colors.py -- snap every fill/stroke/stop-color to the spec palette.
 
 Pipeline stage 3 (cleanup). This is the half of the SVGO step that matters for
-spot-colour print, implemented in pure Python because this host has no Node.js
+spot-colour print, implemented in pure Python so it needs no Node.js runtime
 (scripts/svgo_print.yml covers the rest wherever node is available).
 
 Why it matters: on a screen-print job each distinct colour is a separate screen

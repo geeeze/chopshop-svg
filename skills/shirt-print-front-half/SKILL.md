@@ -17,7 +17,7 @@ GPT/Astra). It produces candidates + metrics only.
 ## Workflow
 
 ```bash
-cd /path/to/chopshop-svg
+cd <repo root>
 ./front_pipeline.sh artwork.png                 # prep -> sweep -> compare
 ./front_pipeline.sh artwork.png --sweep s.json  # custom sweep
 ./front_pipeline.sh artwork.png --skip-prep     # reuse an existing prep
@@ -191,8 +191,8 @@ Locked in by `test_parallel_matches_sequential` in both test files.
 `scripts/palette_variants.py` re-colours a FINISHED trace onto the palettes in
 `scripts/palettes.json` while leaving the CAD structure byte-identical (only
 `fill`/`stroke`/`stop-color` change; every `d=`, `viewBox`, `width`/`height` is
-untouched). It is an aux layer: it calls the pipeline, nothing calls it. Output:
-`07_palettes/<stem>/<palette-id>/` + `report.json|md`.
+untouched). It is an aux layer -- it calls the pipeline,
+nothing calls it. Output: `07_palettes/<stem>/<palette-id>/` + `report.json|md`.
 
 ```bash
 .venv/bin/python scripts/palette_variants.py --list

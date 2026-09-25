@@ -9,7 +9,7 @@
         "mae_art": 114.509,
         "measured": true,
         "p95": 170.0,
-        "source": "/home/monop/davesnothere/01_prepped/00-example.prepped.png",
+        "source": "01_prepped/00-example.prepped.png",
         "within10": 0.0
       },
       "file": "candidate_09.svg",
@@ -68,7 +68,7 @@
         "mae_art": 114.509,
         "measured": true,
         "p95": 170.0,
-        "source": "/home/monop/davesnothere/01_prepped/00-example.prepped.png",
+        "source": "01_prepped/00-example.prepped.png",
         "within10": 0.0
       },
       "file": "candidate_10.svg",
@@ -127,7 +127,7 @@
         "mae_art": 18.975,
         "measured": true,
         "p95": 46.0,
-        "source": "/home/monop/davesnothere/01_prepped/00-example.prepped.png",
+        "source": "01_prepped/00-example.prepped.png",
         "within10": 0.5038
       },
       "file": "candidate_07.svg",
@@ -224,7 +224,7 @@
         "mae_art": 20.197,
         "measured": true,
         "p95": 47.0,
-        "source": "/home/monop/davesnothere/01_prepped/00-example.prepped.png",
+        "source": "01_prepped/00-example.prepped.png",
         "within10": 0.486
       },
       "file": "candidate_03.svg",
@@ -306,7 +306,7 @@
         "mae_art": 20.261,
         "measured": true,
         "p95": 47.0,
-        "source": "/home/monop/davesnothere/01_prepped/00-example.prepped.png",
+        "source": "01_prepped/00-example.prepped.png",
         "within10": 0.4853
       },
       "file": "candidate_11.svg",
@@ -388,7 +388,7 @@
         "mae_art": 63.135,
         "measured": true,
         "p95": 110.0,
-        "source": "/home/monop/davesnothere/01_prepped/00-example.prepped.png",
+        "source": "01_prepped/00-example.prepped.png",
         "within10": 0.0014
       },
       "file": "candidate_04.svg",
@@ -475,7 +475,7 @@
         "mae_art": 62.999,
         "measured": true,
         "p95": 110.0,
-        "source": "/home/monop/davesnothere/01_prepped/00-example.prepped.png",
+        "source": "01_prepped/00-example.prepped.png",
         "within10": 0.0014
       },
       "file": "candidate_12.svg",
@@ -562,7 +562,7 @@
         "mae_art": 67.234,
         "measured": true,
         "p95": 113.0,
-        "source": "/home/monop/davesnothere/01_prepped/00-example.prepped.png",
+        "source": "01_prepped/00-example.prepped.png",
         "within10": 0.0017
       },
       "file": "candidate_08.svg",
@@ -669,7 +669,7 @@
         "mae_art": 110.373,
         "measured": true,
         "p95": 163.0,
-        "source": "/home/monop/davesnothere/01_prepped/00-example.prepped.png",
+        "source": "01_prepped/00-example.prepped.png",
         "within10": 0.0
       },
       "file": "candidate_01.svg",
@@ -3138,7 +3138,7 @@
         "mae_art": 110.372,
         "measured": true,
         "p95": 163.0,
-        "source": "/home/monop/davesnothere/01_prepped/00-example.prepped.png",
+        "source": "01_prepped/00-example.prepped.png",
         "within10": 0.0
       },
       "file": "candidate_02.svg",
@@ -5607,7 +5607,7 @@
         "mae_art": 110.373,
         "measured": true,
         "p95": 163.0,
-        "source": "/home/monop/davesnothere/01_prepped/00-example.prepped.png",
+        "source": "01_prepped/00-example.prepped.png",
         "within10": 0.0
       },
       "file": "candidate_05.svg",
@@ -8076,7 +8076,7 @@
         "mae_art": 110.372,
         "measured": true,
         "p95": 163.0,
-        "source": "/home/monop/davesnothere/01_prepped/00-example.prepped.png",
+        "source": "01_prepped/00-example.prepped.png",
         "within10": 0.0
       },
       "file": "candidate_06.svg",
@@ -10547,7 +10547,7 @@
     "b": true
   },
   "sort": "fewest hard gates failed, then fewest advisories",
-  "spec": "/home/monop/davesnothere/spec.json",
+  "spec": "spec.json",
   "tool": "compare_candidates.py",
-  "traced_dir": "/home/monop/davesnothere/02_traced/00-example"
+  "traced_dir": "02_traced/00-example"
 }

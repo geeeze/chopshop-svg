@@ -1,7 +1,7 @@
 {
   "artifacts": {
-    "print_pdf": "/home/monop/davesnothere/.preflight-work/candidate_03.print.pdf",
-    "proof_png": "/home/monop/davesnothere/.preflight-work/candidate_03.proof.png"
+    "print_pdf": ".preflight-work/candidate_03.print.pdf",
+    "proof_png": ".preflight-work/candidate_03.proof.png"
   },
   "findings": [
     {
@@ -45,7 +45,7 @@
   "input": {
     "file": "02_traced/00-example/candidate_03.svg",
     "kind": "svg",
-    "spec": "/home/monop/davesnothere/spec.json"
+    "spec": "spec.json"
   },
   "notes": [
     "document is 270.93mm wide but declares no viewBox, so all lengths are read as CSS px (1px = 0.2646mm)",
@@ -3828,8 +3828,8 @@
     "pdf_images": [],
     "pdf_page_size": "768 x 768 pts",
     "pdf_pages": 1,
-    "pdf_path": "/home/monop/davesnothere/.preflight-work/candidate_03.print.pdf",
-    "proof_path": "/home/monop/davesnothere/.preflight-work/candidate_03.proof.png",
+    "pdf_path": ".preflight-work/candidate_03.print.pdf",
+    "proof_path": ".preflight-work/candidate_03.proof.png",
     "proof_pixels": 10240000,
     "rendered_area_threshold_percent": 0.05,
     "rendered_blend_tolerance": 24.0,

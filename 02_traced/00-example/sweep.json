@@ -233,11 +233,11 @@
   "deterministic": true,
   "generated": "2026-09-24T04:04:25+00:00",
   "input": {
-    "file": "/home/monop/davesnothere/01_prepped/00-example.prepped.png",
+    "file": "01_prepped/00-example.prepped.png",
     "sha256": "f71ae6afa811500082c55499ed3dc03dbc6dc0f36e271ae8c83a9daf214cfed0"
   },
   "skipped_axes": {},
-  "spec": "/home/monop/davesnothere/spec.json",
+  "spec": "spec.json",
   "sweep": {
     "filter_speckle": [
       2,

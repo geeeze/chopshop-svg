@@ -73,12 +73,12 @@ Pick what looks right for your job.
 | pngquant | optional colour quantisation in prep | optional — skipped if absent |
 | rembg | optional background removal in prep | optional — skipped if absent |
 | realesrgan-ncnn-vulkan | optional higher-quality upscale in prep | optional — skipped if absent |
-| SVGO (Node.js) | optional SVG cleanup (see `scripts/svgo_print.yml`) | optional — this host has no Node |
+| SVGO (Node.js) | optional SVG cleanup (see `scripts/svgo_print.yml`) | optional — needs a Node runtime |
 
 Debian/Ubuntu one-liner for the required tools:
 
 ```bash
-sudo apt-get install inkscape ghostscript qpdf
+sudo apt-get install inkscape ghostscript qpdf poppler-utils potrace
 ```
 
 ### Optional tools (install only if you want that prep step)
@@ -89,7 +89,7 @@ against the current releases:
 
 ```bash
 # colour quantisation in prep (--fix), to spec.print.prep_colors
-sudo apt-get install pngquant              # Debian/Ubuntu (v2.18 in trixie)
+sudo apt-get install pngquant              # Debian/Ubuntu
 #   or: brew install pngquant              # macOS
 
 # background removal in prep (--fix).  rembg 2.x ships NO CLI binary, and its

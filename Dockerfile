@@ -1,8 +1,8 @@
 # chopshop-svg — containerised stack (runs anywhere Docker/podman does)
 #
-# Mirrors the tested deployment: Debian 13 (trixie), Inkscape 1.4, Ghostscript,
-# qpdf, potrace, Python 3.13 venv. Build, then mount your inputs and run the
-# pipeline through it — no host installs beyond a container runtime.
+# Debian 13 (trixie) base: Inkscape 1.4, Ghostscript, qpdf, potrace, Python 3.13
+# venv. Build, then mount your inputs and run the pipeline through it — no host
+# installs beyond a container runtime.
 
 FROM debian:13
 

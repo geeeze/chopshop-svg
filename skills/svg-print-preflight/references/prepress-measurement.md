@@ -1,6 +1,6 @@
 # Prepress measurement recipes
 
-Everything here was established by measurement on Debian 13, Inkscape 1.4,
+Everything here was established by measurement on Linux with Inkscape 1.4 and
 Ghostscript 10.05. Nothing is from documentation.
 
 ## Render a proof

@@ -1,6 +1,6 @@
 # Candidate comparison: 00-example
 
-- spec: `/home/monop/davesnothere/spec.json`
+- spec: `spec.json`
 - candidates: 12
 - layer A (source validation): available
 - layer B (render preflight): available

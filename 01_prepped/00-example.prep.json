@@ -49,7 +49,7 @@
   "notes": [],
   "output": {
     "container": "png",
-    "file": "/home/monop/davesnothere/01_prepped/00-example.prepped.png",
+    "file": "01_prepped/00-example.prepped.png",
     "sha256": "f71ae6afa811500082c55499ed3dc03dbc6dc0f36e271ae8c83a9daf214cfed0",
     "size_bytes": 2297410,
     "size_px": [
