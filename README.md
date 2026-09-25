@@ -207,6 +207,7 @@ chopshop-svg/
 │   ├── run_record.py          # provenance spine: stitch a run into 06_run/<stem>.run.json
 │   ├── closeout.py            # pass/fail board per candidate vs requirements.json
 │   ├── FRONT_HALF.md          # front-half documentation
+│   ├── NODE_REDUCTION.md      # node-reduction sourcing research (no tool adopted)
 ├── requirements.json          # requirements matrix (R-NN | requirement | source | check)
 ├── tests/                     # pytest suite (synthetic fixtures only)
 ├── 00_source/                 # example raster/SVG batch for the back half
@@ -324,4 +325,9 @@ broken.
 - `HOWTO-print-check.md` — deeper walkthrough of the print-check concepts.
 - `scripts/FRONT_HALF.md` — the front half in detail (sweep, fidelity metric,
   parallelism).
+- `scripts/NODE_REDUCTION.md` — why no external tool was adopted for
+  `geometry_overload`: byte optimizers do not reduce nodes, svg-simplifier
+  crashes on 40% of real paths, Inkscape's default threshold costs 18% of the
+  ink, and every tool ignores the shared boundaries between adjacent colour
+  regions. Includes the measured trade-off curves.
 - `AGENTS.md` — handoff notes for an AI agent (GPT/Hermes/etc.) picking this up.
