@@ -369,10 +369,13 @@ remediation plan. It becomes loopable with a bounded, targeted remedy.
      the worst node count at low thresholds (§1d)
    - **verify by render** → ink drift and gap blobs
 5. **`geometry_overload` is now remediable** — a bounded, targeted simplification
-   clears the gate on every example candidate tested, at ink costs from 0.005%
-   to 1.19%. Update the remediation table to make it loopable, citing
-   `NODE_COUNT`, with the render verification as the pass condition rather than
-   the node count alone.
+   clears the gate on every example candidate tested (1 to 19 paths touched per
+   file, max nodes brought to 439–497 against a limit of 500), with erosion
+   ranging from **0.007% to 2.326%** of changed pixels depending on the artwork.
+   Update the remediation table to make it loopable, citing `NODE_COUNT`, with
+   the render verification as the pass condition rather than the node count
+   alone — the node count clears on all four, but the erosion spread shows that
+   passing the gate says nothing about whether the artwork survived.
 6. **Raise the gate instead of forcing the fix if the render says no.** For a
    complex illustration, one contour at 826 nodes is a legitimate finding to
    report. `max_nodes_per_path: 500` is a default, not a law — the pipeline's job
