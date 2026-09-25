@@ -16,7 +16,7 @@ printers reject files and re-quote jobs.
 > resolved when the front half shipped.
 
 ```bash
-cd /home/monop/davesnothere
+cd /path/to/chopshop-svg
 ./pipeline.sh 00_source/your-artwork.svg
 ```
 

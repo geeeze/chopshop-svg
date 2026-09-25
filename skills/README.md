@@ -23,3 +23,12 @@ cp -r skills/svg-print-preflight  ~/.hermes/skills/svg-print-preflight
 The `.md` files are readable as-is for a human too — they are the design notes
 and pitfall list for the code they describe. `AGENTS.md` is the shorter
 orientation; these skills are the deep reference.
+
+## Scope
+
+These two cover the pipeline in this repo. The optional layers that sit *around*
+it — SwarmUI/ComfyUI generation and the Jev decision sidecar — are separate,
+private-stack projects (`chopshop-sui`, `chopshop-jev`) with their own skills,
+because they encode a specific generation stack and local install paths rather
+than anything about the pipeline itself. Nothing here depends on them: both are
+opt-in and neither is called by `front_pipeline.sh` or `pipeline.sh`.

@@ -7,7 +7,7 @@
 One command runs both quality gates:
 
 ```bash
-cd /home/monop/davesnothere
+cd /path/to/chopshop-svg
 ./pipeline.sh 00_source/your-artwork.svg
 ```
 

@@ -36,8 +36,8 @@ test-side bug, and "fixing" the script to match it ships the bug.
    `.venv/bin/python`:
    `python3 -m venv .venv && .venv/bin/pip install lxml svgpathtools pytest`
    For rendering and prepress measurement (print work), add the CLI set:
-   `pkexec env DEBIAN_FRONTEND=noninteractive apt-get install -y inkscape
-   librsvg2-bin poppler-utils imagemagick potrace qpdf fonts-liberation`
+   `sudo apt-get install -y inkscape ghostscript qpdf poppler-utils potrace
+   colord-data fonts-dejavu-core`
    plus `Pillow` and `numpy` in the venv. Inkscape's CLI export works headless,
    so a GUI install is fine on a server.
 2. **Parse once, defensively.** `etree.XMLParser(resolve_entities=False,
@@ -108,7 +108,16 @@ test-side bug, and "fixing" the script to match it ships the bug.
   class, then index — never invent an id.
 - **State your limitations in the script header.** Unresolved percentages, an
   unapplied `transform="scale(...)"`, unresolved `var()`: name them as
-  documented limits rather than letting a reader assume full fidelity.
+  documented limits rather than letting a reader assume full fidelity. And when
+  a limitation can silently flip a verdict, emit a per-file ADVISORY naming the
+  affected elements at run time as well — a header note is not read by the
+  pipeline. An unapplied `scale()` is the model case: `stroke-width="10"`
+  inside `<g transform="scale(0.01)">` passes a 1.5pt minimum while really
+  measuring ~0.28pt, so the validator reports "pass" on a stroke it never
+  measured. Emit that as a non-failing note (element label first, capped like
+  every other repeated finding), not a hard failure: the true width cannot be
+  computed without a full transform stack, and failing the job would assert
+  something the tool has not established.
 - **Derive a spec option only when its key is absent, and report a conflict.**
   Where one option implies another (an underbase implies white is an ink),
   compute the implied value only if the key is missing. If both are set and
@@ -175,6 +184,43 @@ than no figure.
 
 ## Pitfalls
 
+- **Differential-test a rewritten numeric routine against the old one** rather
+  than re-reading the new code for equivalence. Keep the previous
+  implementation verbatim, run both over randomised inputs, and assert they
+  agree on the same output. A numpy rewrite of `_blend_target` (pairwise
+  colour-projection, was O(anchors²) pure Python at ~125k inner iterations per
+  stray colour) matched the original on 3000 random anchor sets plus edge cases.
+  Rewrites of this kind *read* as obviously equivalent, which is exactly why
+  re-reading is not evidence: tie-break order and last-bit float drift are
+  invisible in the source and only a differential run finds them.
+- **`_blend_target` invariants to preserve when editing it**: paper (`None`)
+  anchors are blended *through* but never own a stray colour; zero-length and
+  same-index anchor pairs are excluded; on an equal gap the `i<j` pair wins.
+  Keep them and the O(n²) pair set collapses to the same owner as the nested
+  loop, which is what stops an antialiasing chain becoming phantom inks.
+- **An advisory must be written to `notes`/`stats`, never to `failures`.**
+  `validate_svg.main` exits 1 on *any* entry in `failures`, so a non-fatal
+  observation placed there silently converts a PASS into a FAIL. When adding a
+  finding that cannot flip the verdict, route it to `notes` and let
+  `preflight.classify_findings` decide severity.
+- **Two "optional-looking" apt packages are required and fail tests when
+  absent: `poppler-utils` and `colord-data`.** The preflight shells out to
+  `pdfimages`/`pdfinfo` (poppler-utils) for placed-bitmap resolution and
+  colour-space detection — without them the `pdf_images` stat is missing and the
+  image tests fail. `pick_cmyk_profile` prefers colord's SWOP/FOGRA ICC
+  profiles; without `colord-data` it falls back to Ghostscript's default profile
+  and the RGB→CMYK ink estimate changes enough that the "ink is advisory on RGB
+  input" test never fires. Both belong in any Dockerfile/apt line that packs the
+  stack — this is exactly what breaks when containerising a working host.
+- **Corollary: a suite that needs a system tool must SKIP, not fail.** Because
+  these tools are genuinely required, guard every test that shells out to one
+  with `pytest.mark.skipif(shutil.which('<tool>') is None)` — one marker per
+  tool, or a single marker covering the set (`inkscape`, `gs`, `qpdf`,
+  `pdfinfo`, `pdfimages`) applied at class level. A suite that goes red on a
+  checkout lacking the tools trains the reader to ignore red, and the real
+  regression then hides in the noise. Check the *library* import separately
+  (`import vtracer`) for tracer-dependent tests — a pip package has no binary
+  for `which` to find, so a `which`-only guard silently skips nothing.
 - **Colour-cluster merging needs a shape test, not a size test.** Antialiasing
   lays a chain of near-identical colours along every boundary. Merging by
   colour-space distance leaves those links as separate clusters, and two size

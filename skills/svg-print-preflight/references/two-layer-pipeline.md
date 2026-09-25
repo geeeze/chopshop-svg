@@ -99,11 +99,13 @@ severity, the artifacts, and the tool versions — a result is uninterpretable
 months later without the Ghostscript version. Write it from the orchestrator so
 there is exactly one copy.
 
-Artifact naming: write `<stem>.proof.png` and `<stem>.manifest.json` as the
-canonical outputs, plus a run-unique copy stamped with a timestamp + a few
-random bytes (`<stamp>.proof.png` / `<stamp>.manifest.json`). The stamped copy
-keeps a single-job handoff convenient; the run stamp means a batch never has
-one job overwrite another.
+Artifact naming: write `<stem>.proof.png` / `<stem>.print.pdf` /
+`<stem>.manifest.json` as the canonical per-job names, **plus a run-unique
+stamped copy** (`<YYYYmmdd-HHMMSS>-<4 random hex>.proof.png`, etc.). Never write a
+fixed plain name (`proof.png` / `manifest.json`) — consecutive runs silently
+overwrite each other, which is why the user asked for stamping. The stamped copy
+keeps a single-job handoff convenient; the run stamp means a batch never has one
+job clobber another.
 
 ## Batch design
 

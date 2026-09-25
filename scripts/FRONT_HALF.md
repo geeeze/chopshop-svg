@@ -146,7 +146,7 @@ print size, and it becomes a real gate again — the two layers already honour i
 ## The workflow
 
 ```bash
-cd /home/monop/davesnothere
+cd /path/to/chopshop-svg
 
 # one command, front half only (prep checks + copies through unchanged):
 ./front_pipeline.sh my-artwork.png

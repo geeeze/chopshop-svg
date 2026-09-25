@@ -86,8 +86,8 @@ on each pick, loop for more picks or quit.
   `vtracer` CLI on PATH, and no `gradient_step` parameter**. The standalone CLI
   has `--help` and more flags; the pip API's available params come from
   introspecting `convert_image_to_svg_py`'s signature.
-- `pkexec` is passwordless root here; `sudo -n` fails and the user dislikes sudo
-  prompts. Prefer non-privileged paths.
+- Prefer non-privileged paths: run the pipeline as a normal user and avoid any
+  step that needs root.
 
 ## Contracts and conventions
 

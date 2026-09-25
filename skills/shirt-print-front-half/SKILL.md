@@ -5,7 +5,7 @@ description: Use when tracing a raster into candidate SVGs for print.
 
 # Shirt-print pipeline: front half (raster → traced candidates)
 
-The project `/home/monop/davesnothere` is a two-half T-shirt print pipeline.
+This repository is a two-half T-shirt print pipeline.
 The BACK half (`validate_svg.py` Layer A, `preflight.py` Layer B,
 `snap_colors.py`, `pipeline.sh`) checks an SVG for print readiness. The FRONT
 half answers what comes before: given a raster, which vector traces are worth
@@ -17,7 +17,7 @@ GPT/Astra). It produces candidates + metrics only.
 ## Workflow
 
 ```bash
-cd /home/monop/davesnothere
+cd /path/to/chopshop-svg
 ./front_pipeline.sh artwork.png                 # prep -> sweep -> compare
 ./front_pipeline.sh artwork.png --sweep s.json  # custom sweep
 ./front_pipeline.sh artwork.png --skip-prep     # reuse an existing prep
@@ -116,8 +116,7 @@ physical size on the chosen candidate before the back half.
 
 ## Prep helpers (all optional, degrade gracefully)
 
-- `rembg` (`pip install 'rembg[cpu]'` — module + onnxruntime; rembg 2.x has no
-  CLI binary, so our prep uses the Python module) — background removal. Skip via
+- `rembg` (`pip install 'rembg[cli]'`) — background removal. Skip via
   `spec.print.assume_opaque_bg: true`.
 - `realesrgan-ncnn-vulkan` (GitHub release binary) — upscale. Falls back to
   Pillow LANCZOS.
@@ -127,6 +126,32 @@ physical size on the chosen candidate before the back half.
 Missing binaries: skip the step, log a warning, record it in the sidecar —
 NEVER crash the run. CMYK TIFF → convert to sRGB first. Very large inputs:
 downscale-then-upscale (bounded memory).
+
+## Sweep config: preset_params (new)
+
+The sweep JSON now accepts a `preset_params` key that maps preset name →
+dict of VTracer params, merged over the built-in PRESETS.  This lets the user
+lower `color_precision` for a flatter trace without editing code:
+```json
+{"presets": ["poster", "poster_flat"], "preset_params": {"poster_flat":
+ {"colormode": "color", "mode": "spline", "color_precision": 2}}}
+```
+
+## Colour reduction to <20 colours
+
+The `poster` preset produces hundreds of colours on complex images (VTracer's
+color mode clusters aggressively but antialiasing creates many intermediate
+hues).  The path to <20 colours is **snap_colors.py --force** as a
+post-processing step: it snaps every fill/stroke to the spec palette, giving
+3-6 colours.  `prep_colors` (pngquant) and `color_precision` alone are NOT
+sufficient on photographic input.
+
+## Round-robin truncation (fixed)
+
+`build_candidates` now round-robins across per-speckle groups (zip_longest)
+before truncating to the cap, and within each speckle group round-robins
+across presets.  Before this fix, with a palette and cap 12, all 12 were
+speckle=2 and speckle=16 was never traced.
 
 ## Spec keys the front half owns (all under `print`, optional)
 
@@ -160,6 +185,44 @@ Two concurrency pitfalls, both fixed in `front_common`/`compare_candidates`:
   candidate a sub-workdir `<out>/<stem>.work/<candidate>/`.
 
 Locked in by `test_parallel_matches_sequential` in both test files.
+
+## Palette variations (auxiliary layer)
+
+`scripts/palette_variants.py` re-colours a FINISHED trace onto the palettes in
+`scripts/palettes.json` while leaving the CAD structure byte-identical (only
+`fill`/`stroke`/`stop-color` change; every `d=`, `viewBox`, `width`/`height` is
+untouched). It is an aux layer: it calls the pipeline, nothing calls it. Output:
+`07_palettes/<stem>/<palette-id>/` + `report.json|md`.
+
+```bash
+.venv/bin/python scripts/palette_variants.py --list
+.venv/bin/python scripts/palette_variants.py 00_source/art.svg --only cool-luxe
+.venv/bin/python scripts/palette_variants.py --from-final 00-example --preflight
+.venv/bin/python scripts/palette_variants.py art.svg --map '#c1440e=#9caf88'
+```
+
+Mapping priority: explicit `map` (palette entry or `--map`) > background anchor
+(largest-area source colour -> palette `background`) > strategy
+(`--strategy area` default, or `nearest` = snap_colors semantics).
+
+Two hard-won facts:
+
+- **No colour-space heuristic recovers intent.** Verified on a real fixture: with
+  `area`, red `#c1440e` mapped to sage and green `#6a8a3f` to ivory -- arbitrary.
+  Never present heuristic output as "the" recolour; `mapping.json` is written
+  beside every variant precisely so the result can be pinned into an explicit
+  `map` in one edit. That pin is the production path.
+- **`validate_svg.normalize_color()` passes unknown strings through unchanged**
+  (`'not-a-colour' -> 'not-a-colour'`; it only resolves named colours and hex).
+  It is therefore NOT a validator. Palette entries and `--map` values must be
+  gated by a strict `^#[0-9a-f]{6}$` check (`palette_variants.as_hex`), or a typo
+  reaches the artwork as `fill="not-a-colour"` and crashes `hex_to_rgb`.
+
+Weights come from ONE Inkscape render (96 dpi, area only) reused across every
+palette; without Inkscape they degrade to element counts and the report says so.
+The biggest *visible* area wins the background anchor -- a motif covering most of
+the canvas beats the ground, which is right for print (ink area) but worth
+knowing when a design is densely covered.
 
 ## Conventions / pitfalls
 
