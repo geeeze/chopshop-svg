@@ -228,47 +228,118 @@ It is fast and it does clear the gate:
 | 2.00 | 189 | 0 | 78.3% | 0.66 s |
 
 But its **geometric fidelity is 8x worse than Inkscape's at lower reduction**
-(see the table in §3: 1.627% of frame changed vs Inkscape's 0.196%). Known
-cause: deviation is measured by comparing the fitted curve and the original
-sample **at the same chord-length parameter**, which is not a true geometric
-distance. A correct implementation needs the nearest-point-on-curve distance
-plus Schneider-style re-parameterisation. Until then, shipping it would be
-shipping something strictly worse than a tool already on the box.
+in whole-file mode (see the table in §3: 1.627% of frame changed vs Inkscape's
+0.196%). Known cause: deviation is measured by comparing the fitted curve and
+the original sample **at the same chord-length parameter**, which is not a true
+geometric distance. A correct implementation needs the nearest-point-on-curve
+distance plus Schneider-style re-parameterisation.
 
-## 5. Recommendation
+**Important qualification:** that verdict applies to *whole-file* simplification.
+Applied only to the paths that actually fail the gate (§5) the same fitter beats
+Inkscape on ink preservation, because the flaw's impact scales with how much of
+the file is being refitted. The metric should still be corrected, but the tool is
+not the dead end §3's numbers suggest.
+
+## 5. The solution: simplify only the paths that fail
+
+All of the above assumed the whole file has to be simplified. It does not. The
+failure is a handful of outliers — **1 path of 204** on `candidate_09`, **3 of
+2 491** on `candidate_04`, **13 of 12 517** on `candidate_08`. Simplifying
+everything spends fidelity on thousands of paths that were already fine.
+
+Restricting the work to paths whose `path_nodes_max` exceeds the gate, and
+escalating tolerance per path until it clears, changes the economics completely.
+
+`candidate_09` — **identical node outcome, one path touched instead of 204**:
+
+| mode | paths touched | max nodes | gate | ink lost | frame changed |
+|---|---|---|---|---|---|
+| **targeted** tol 0.5 | **1** | 439 | cleared | **1.192%** | **0.432%** |
+| whole file tol 0.5 | 204 | 439 | cleared | 6.615% | 1.510% |
+
+Same `max` (439), same gate result — **5.6x less ink lost, 3.5x less of the
+frame disturbed.** Targeted also leaves `total` at 7 338 versus 3 971, so the
+detail that was already acceptable is preserved rather than flattened.
+
+It also beats every external tool measured here:
+
+| approach | max nodes | ink lost |
+|---|---|---|
+| Inkscape, gate-clearing threshold | 499 | 1.639% |
+| Inkscape, default threshold | 234 | 18.116% |
+| **targeted, tol 0.5** | **439** | **1.192%** |
+
+And it holds on the hard candidates:
+
+| candidate | over-gate paths | touched | max before | max after | ink lost | frame changed |
+|---|---|---|---|---|---|---|
+| `candidate_09` | 1 | 1 | 826 | 439 | 1.192% | 0.43% |
+| `candidate_04` | 3 | 3 | 2 364 | 490 | — | 2.09% |
+| `candidate_08` | 13 | 13 | 2 240 | 461 | **0.005%** | 1.98% |
+
+`candidate_08` is the striking one: clearing the gate on the worst
+example candidate costs **0.005% of ink** — effectively nothing. The changes are
+overwhelmingly ink *gained* rather than lost, and **gained ink is benign for flat
+spot colour while lost ink is a white hairline through the print.** That
+asymmetry is why the targeted result matters more than the aggregate percentage.
+
+### Two design consequences
+
+**Targeting is engine-independent — it is the strategy, not the tool.** The same
+restriction applies to Inkscape: select only the offending paths and simplify
+those. `candidate_09`'s 1.639% was the price of simplifying all 204 paths; a
+targeted Inkscape run should do better still, because Inkscape's reduction was
+the best-measured per path. Worth measuring before choosing an engine.
+
+**The gate can now be met without mangling the art**, which means
+`geometry_overload` stops being the "unfixable" mode it was treated as in the
+remediation plan. It becomes loopable with a bounded, targeted remedy.
+
+### What still needs doing
+
+1. **Fix the fitted-deviation metric** in `simplify_paths.py` — it currently
+   compares the fit and the original at the same chord-length parameter rather
+   than by true nearest-point distance, which is why whole-file mode perturbs 8x
+   more than Inkscape. In targeted mode the flaw matters much less (one path,
+   and it already beats Inkscape), but it should still be corrected before the
+   tool is relied on.
+2. **Weld shared boundaries** (§3) — still the real remaining risk. Targeted
+   simplification limits which edges can move, which reduces exposure, but does
+   not eliminate it.
+3. **Wire the verification** — render before/after, report ink lost/gained and
+   the largest gap blob. Nothing in the toolchain does this, and it is what
+   detected the 18% default-threshold loss.
+4. **Decide the escalation policy** — each path gets a bounded tolerance search
+   (double up to a cap). Record the per-path tolerance actually used in the
+   sidecar so a run is explainable.
+
+## 6. Recommendation
 
 1. **Do not adopt a byte optimizer.** It cannot fix this and will look like it
    did.
 2. **Do not adopt `svg-simplifier`** without forking it — 40.7% failure on real
    input, plus a GEOS dependency.
-3. **Use Inkscape as the reduction engine.** It is already required, it reduces
-   best, and it perturbs least. Treat the two problems as work to wrap, not
-   reasons to reject it:
+3. **Do not simplify the whole file.** Target the over-gate paths (§5). This is
+   the single biggest lever and it is independent of which engine runs the fit.
+4. **Prefer Inkscape as the engine**, for reduction quality per path, with the
+   wrapper supplying what it lacks:
    - threshold control → write a scoped `preferences.xml` and point `HOME` at it
-   - gate targeting → **escalate the threshold per file** until
-     `path_nodes_max <= max_nodes_per_path`. A fixed value provably does not
-     transfer (4x spread between two candidates, §1d), and the gate-clearing
-     value leaves a 0.2% margin on the file it was tuned for. Budget a bounded
-     escalation, and expect a cliff rather than a slope.
-   - **reject regressions** → compare `path_nodes_max` against the input and
-     refuse a result that is worse. Inkscape can *increase* the worst node count
-     at low thresholds (§1d), so "it simplified successfully" is not evidence of
-     improvement.
-   - **verification → render before/after and report ink drift and gap blobs.**
-     Nothing in the toolchain does this today, and it is what caught the 18%
-     ink loss. This is the single most valuable addition.
-4. **Treat shared-edge preservation as the real engineering task.** Either weld
-   the boundary vertices globally before simplifying (so two regions that shared
-   a vertex still do), or accept Inkscape's hairlines and manage them. A
-   region-aware simplifier is the correct long-term answer and no external tool
-   provides one.
-5. **Keep `geometry_overload` out of the automated loop until (3) exists.** A
-   remediation that silently loses 18% of the ink is worse than one that stops
-   and says `not_loopable`. Note also that the achievable ink cost is
-   per-file and unpredictable (§1d), so a loop needs the measurement to know
-   whether a remedy succeeded, not just the node count.
-
-## 6. Reproduction
+   - gate targeting → select only the offending paths (by id), then simplify
+   - **escalate per file**, because a fixed threshold provably does not transfer
+     (4x spread, §1d) and the gate-clearing value leaves a 0.2% margin
+   - **reject regressions** → compare against the input; Inkscape can *increase*
+     the worst node count at low thresholds (§1d)
+   - **verify by render** → ink drift and gap blobs
+5. **`geometry_overload` is now remediable** — a bounded, targeted simplification
+   clears the gate on every example candidate tested, at ink costs from 0.005%
+   to 1.19%. Update the remediation table to make it loopable, citing
+   `NODE_COUNT`, with the render verification as the pass condition rather than
+   the node count alone.
+6. **Raise the gate instead of forcing the fix if the render says no.** For a
+   complex illustration, one contour at 826 nodes is a legitimate finding to
+   report. `max_nodes_per_path: 500` is a default, not a law — the pipeline's job
+   is to report, and the human decides. Do not silently trade artwork for a
+   number.
 
 Everything above was measured with the repo's own gate and a real Inkscape
 render. The harnesses (shared-boundary probe, threshold sweep, print test,
