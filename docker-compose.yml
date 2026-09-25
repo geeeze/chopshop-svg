@@ -13,6 +13,29 @@
 # this same file.
 
 services:
+  runner:
+    build: .
+    image: chopshop-svg:0.1.0
+    working_dir: /app
+    command: [".venv/bin/python", "runner.py"]
+    environment:
+      RUNNER_PORT: "8787"
+      RUNNER_BIND: "0.0.0.0"
+      RUNNER_ROOT: /data/jobs
+      HOST_UPLOAD_ROOT: /home/unodos/chopshop-studio/public/uploads
+      CONTAINER_UPLOAD_ROOT: /data/uploads
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - ./runner-data/jobs:/data/jobs
+      - /home/unodos/chopshop-studio/public/uploads:/data/uploads:ro
+      - ./01_prepped:/app/01_prepped
+      - ./02_traced:/app/02_traced
+      - ./03_cleaned:/app/03_cleaned
+      - ./04_validated:/app/04_validated
+      - ./05_final:/app/05_final
+    restart: unless-stopped
+
   chopshop:
     build: .
     image: chopshop-svg:0.1.0
