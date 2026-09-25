@@ -269,19 +269,57 @@ It also beats every external tool measured here:
 | Inkscape, default threshold | 234 | 18.116% |
 | **targeted, tol 0.5** | **439** | **1.192%** |
 
-And it holds on the hard candidates:
+And it holds on the hard candidates — **all four clear the gate**:
 
-| candidate | over-gate paths | touched | max before | max after | ink lost | frame changed |
+| candidate | over-gate paths | touched | max before | max after | px changed | darkened |
 |---|---|---|---|---|---|---|
-| `candidate_09` | 1 | 1 | 826 | 439 | 1.192% | 0.43% |
-| `candidate_04` | 3 | 3 | 2 364 | 490 | — | 2.09% |
-| `candidate_08` | 13 | 13 | 2 240 | 461 | **0.005%** | 1.98% |
+| `candidate_09` | 1 of 204 | 1 | 826 | **439** | 0.696% | 0.463% |
+| `candidate_04` | 3 of 2 491 | 3 | 2 364 | **490** | 2.725% | **0.007%** |
+| `candidate_08` | 13 of 12 517 | 13 | 2 240 | **497** | 2.420% | **2.326%** |
+| `candidate_07` | 19 of 22 244 | 19 | 1 526 | **477** | 0.080% | 0.056% |
 
-`candidate_08` is the striking one: clearing the gate on the worst
-example candidate costs **0.005% of ink** — effectively nothing. The changes are
-overwhelmingly ink *gained* rather than lost, and **gained ink is benign for flat
-spot colour while lost ink is a white hairline through the print.** That
-asymmetry is why the targeted result matters more than the aggregate percentage.
+`darkened` is the column that matters: it is the share of changed pixels that
+moved *toward* the background, i.e. erosion — the direction that opens a white
+hairline. `px changed` minus `darkened` is ink gained, which is benign for flat
+spot colour.
+
+Read that way the four candidates split into two groups:
+
+- **`candidate_04` and `candidate_07` are essentially pure gain** — 0.007% and
+  0.056% darkened against 2.725% and 0.080% total change. The simplification
+  moves boundaries *outward*, filling rather than eroding. That is the safe
+  direction and it costs the artwork nothing.
+- **`candidate_08` and `candidate_09` do erode** — 2.326% and 0.463% darkened.
+  `candidate_08` is the one that needs the render verification to sign off,
+  because 2.3% of the frame getting lighter is exactly the gap signature.
+
+So the earlier claim that `candidate_08` costs "0.005% of ink" was an artifact of
+the metric — see the warning below. Its real figure is 2.326% darkened.
+
+### Warning: the ink-vs-white metric is degenerate on full-bleed artwork
+
+The measurements in §1c and the first pass at §5 split the render into "ink"
+versus "background" by comparing against white. **That silently fails when the
+artwork has no white background.**
+
+`candidate_07` renders **100.00% "ink"** — every pixel is non-white — so the
+metric had no reference and reported **0.000% change** for a file where 19 paths
+had just been rewritten. Almost reported as a perfect result. It was a broken
+measurement.
+
+Always check the ink fraction before trusting an ink-based number:
+
+| candidate | ink fraction | metric valid? |
+|---|---|---|
+| `candidate_09` | 6.89% | yes |
+| `candidate_08` | 53.91% | yes |
+| `candidate_07` | **100.00%** | **no — degenerate** |
+
+Any implementation must either detect the degenerate case and fall back to a
+pixel-difference metric (as the table above does), or refuse to report a number it
+cannot support. This is the second time in this investigation that a
+plausible-looking figure was produced by a metric that could not discriminate;
+the render verification step is where that gets caught.
 
 ### Two design consequences
 
