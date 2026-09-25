@@ -193,8 +193,6 @@ chopshop-svg/
 ├── pipeline.sh                # BACK half: validate + preflight a chosen SVG
 ├── validate_svg.py            # Layer A — source-level SVG checks
 ├── preflight.py               # Layer B — render + colour/ink/coverage checks
-├── snap_colors.py             # snap a trace's colours to a palette
-├── run_batch.py               # batch-run the back half over a folder
 ├── spec.json                  # the active job contract (see spec.example.json)
 ├── requirements.txt           # Python dependencies (required + optional)
 ├── scripts/
@@ -202,13 +200,17 @@ chopshop-svg/
 │   ├── trace_sweep.py         # front: multi-pass VTracer candidate sweep
 │   ├── compare_candidates.py  # front: run every candidate through A + B
 │   ├── pick_finish.py         # front: --loop menu driver
+│   ├── snap_colors.py         # snap a trace's colours to a palette
+│   ├── palette_variants.py    # aux: re-colour a finished trace onto named palettes
+│   ├── palettes.json          # palette library for palette_variants.py
+│   ├── run_batch.py           # batch-run the back half over a folder
 │   ├── run_record.py          # provenance spine: stitch a run into 06_run/<stem>.run.json
 │   ├── closeout.py            # pass/fail board per candidate vs requirements.json
 │   ├── FRONT_HALF.md          # front-half documentation
 ├── requirements.json          # requirements matrix (R-NN | requirement | source | check)
 ├── tests/                     # pytest suite (synthetic fixtures only)
 ├── 00_source/                 # example raster/SVG batch for the back half
-└── 01_prepped/ 02_traced/ 04_validated/ 05_final/ 06_run/   # generated (gitignored)
+└── 01_prepped/ 02_traced/ 04_validated/ 05_final/ 06_run/ 07_palettes/   # generated (gitignored)
 ```
 
 ---
@@ -246,14 +248,73 @@ both flagged as missing links until they exist):
 
 ---
 
+## Palette variations (`scripts/palette_variants.py`)
+
+The Chopshop-Aided-Design layer. Takes a finished trace — a validated proof, a
+snapped candidate, or the SVG a `05_final/` manifest was built from — and
+re-colours it onto each palette in `scripts/palettes.json`. **The CAD structure
+is never touched**: no path, node, `viewBox` or dimension changes, only
+`fill` / `stroke` / `stop-color`. Same geometry, new colour vectors.
+
+```bash
+.venv/bin/python scripts/palette_variants.py --list
+.venv/bin/python scripts/palette_variants.py 05_final/art.svg
+.venv/bin/python scripts/palette_variants.py --from-final 00-example --preflight
+.venv/bin/python scripts/palette_variants.py art.svg --only cool-luxe --map '#c1440e=#9caf88'
+```
+
+Output lands in `07_palettes/<stem>/<palette-id>/` (the variant SVG plus a
+`mapping.json`) with a `report.json` / `report.md` board for the whole run.
+
+### How it maps colours
+
+Three sources of truth, highest priority first:
+
+1. **Explicit pin** — `map` in the palette entry, or `--map src=dst` on the
+   command line. This is the production path.
+2. **Background anchor** — the largest-area source colour takes the palette's
+   declared `background`.
+3. **Strategy** — `--strategy area` (default: rank the remaining source colours
+   by rendered area against the remaining palette entries) or `nearest` (closest
+   colour; the same semantics `snap_colors.py` uses).
+
+Weights come from a single Inkscape render, reused for every palette. Without
+Inkscape the weighting degrades to element counts and says so in the report.
+
+> **The heuristic cannot read your intent.** No colour-space distance knows that
+> *this* red is the blossom (so it should become plum) while *that* green is
+> foliage (so it should become sage). The `area` and `nearest` passes produce a
+> plausible starting point, not a finished design. Every run writes
+> `mapping.json` showing exactly what it chose, so pinning the result is a
+> one-line edit.
+
+`--preflight` is optional and off by default, so the layer adds no cost to the
+standard flow. It is a separate layer that *calls* the pipeline — never the
+other way round — and it never picks a winner: the report orders by
+print-readiness gates (hard, then advisories), never by which variant looks
+best.
+
+### The library (`scripts/palettes.json`)
+
+Six starting palettes — `red-cream`, `blue-charcoal`, `turquoise-black`,
+`cool-luxe`, `warm-sunny`, `pop-playful`. Each entry is a `background`, a
+`colours` list and an optional `map`. Adding your own is plain JSON; a colour
+that is not a real `#rrggbb` is rejected rather than written into the artwork.
+
+---
+
 ## Tests
 
 ```bash
 .venv/bin/python -m pytest tests/
+.venv/bin/pyflakes scripts/*.py validate_svg.py preflight.py  # lint
 ```
 
-The suite uses synthetic images generated in-test (Pillow), never the real
-artwork, so it runs anywhere without the `00_source/` batch.
+246 tests pass. The suite uses synthetic images generated in-test (Pillow),
+never the real artwork, so it runs anywhere without the `00_source/` batch.
+Tests that need system tools (inkscape, gs, qpdf, poppler-utils) skip
+cleanly when those are absent — a fresh checkout without tools won't look
+broken.
 
 ---
 

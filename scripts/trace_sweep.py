@@ -52,6 +52,7 @@ import re
 import subprocess
 import sys
 from datetime import datetime, timezone
+from itertools import zip_longest
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
@@ -181,6 +182,14 @@ def build_candidates(sweep, spec, available_flags, backend_desc):
     if not (spec.get("geometry") or {}).get("allow_gradients"):
         presets = [p for p in presets if p != "photo"]
 
+    # Allow the sweep JSON to override or add preset parameter sets.  A
+    # ``preset_params`` key maps preset name → dict of VTracer params; these
+    # merge over the built-in PRESETS, so the user can lower color_precision
+    # for a flatter trace without editing the code.
+    preset_overrides = sweep.get("preset_params") or {}
+    preset_table = dict(PRESETS)
+    preset_table.update(preset_overrides)
+
     speckles = list(sweep.get("filter_speckle", [2, 8, 16]))
     hierarchicals = list(sweep.get("hierarchical", ["cutout", "stacked"]))
     use_palettes = list(sweep.get("use_palette", [False, True]))
@@ -205,7 +214,7 @@ def build_candidates(sweep, spec, available_flags, backend_desc):
     # dropped-flag note tells the user why they look alike.
     effective = {}
     for name in presets:
-        params = PRESETS.get(name, {})
+        params = preset_table.get(name, {})
         kept = {k: v for k, v in params.items() if k in available_flags}
         dropped = [k for k in params if k not in available_flags]
         if dropped:
@@ -319,7 +328,40 @@ def _sweep(prepped_png, spec, sweep, out_dir, workers=None):
     spec_max = raw_print.get("sweep_max_candidates")
     max_candidates = (spec_max if spec_max is not None
                       else sweep.get("max_candidates", 12))
-    selected = candidates[:max_candidates]
+    # Round-robin across per-speckle groups before truncating, so a small cap
+    # still samples every speckle value.  A plain stride through the nested
+    # list would alias onto the palette axis (the innermost loop): with a
+    # palette and cap 12, all 12 would be speckle=2 and speckle=16 is never
+    # traced.  Within each speckle group we also round-robin across presets
+    # so a cap doesn't drop the photo preset when allow_gradients is on.
+    if max_candidates < len(candidates):
+        # First, within each speckle group, round-robin across presets.
+        speckle_groups = {}
+        for cand in candidates:
+            speckle_groups.setdefault(cand.get("filter_speckle"), []).append(cand)
+        for speckle, group in speckle_groups.items():
+            preset_groups = {}
+            for cand in group:
+                preset_groups.setdefault(cand.get("preset"), []).append(cand)
+            if len(preset_groups) > 1:
+                pre_interleaved = []
+                for tup in zip_longest(*preset_groups.values()):
+                    for cand in tup:
+                        if cand is not None:
+                            pre_interleaved.append(cand)
+                speckle_groups[speckle] = pre_interleaved
+        # Then round-robin across speckle groups.
+        if len(speckle_groups) > 1:
+            interleaved = []
+            for tup in zip_longest(*speckle_groups.values()):
+                for cand in tup:
+                    if cand is not None:
+                        interleaved.append(cand)
+            selected = interleaved[:max_candidates]
+        else:
+            selected = candidates[:max_candidates]
+    else:
+        selected = candidates[:max_candidates]
 
     source_sha = fc.sha256_file(prepped_png)
     palette_dir = os.path.join(out_dir, ".palette")

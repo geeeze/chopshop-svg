@@ -9,6 +9,7 @@ deterministic, so those are what we assert precisely.
 
 import json
 import os
+import shutil
 import sys
 
 import pytest
@@ -205,6 +206,12 @@ def test_sorted_by_hard_then_advisory(tmp_path):
     assert candidates[0]["hard"] < candidates[1]["hard"]
 
 
+needs_render = pytest.mark.skipif(
+    shutil.which("inkscape") is None,
+    reason="inkscape not installed (fidelity needs render)")
+
+
+@needs_render
 def test_fidelity_metric_measures(tmp_path):
     # A white-on-white trace should diff to ~0 against a white source.  The
     # sweep.json points input.file at the source so it is auto-resolved.

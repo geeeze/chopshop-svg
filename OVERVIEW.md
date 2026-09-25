@@ -8,6 +8,13 @@ It answers one question: *will this file print, and how many screens will it
 cost?* Not "does it look right" — that's your eyes — but the mechanical reasons
 printers reject files and re-quote jobs.
 
+> **Scope note:** this document covers the **back half** (the two gates and the
+> reasoning behind them). The project has since grown a **front half** that turns
+> a *raster* into vector candidates before the back half ever runs — see
+> `README.md`, `scripts/FRONT_HALF.md`, and the stage table below. The design
+> reasoning here still holds; the "not built" caveats in the stage table were
+> resolved when the front half shipped.
+
 ```bash
 cd /home/monop/davesnothere
 ./pipeline.sh 00_source/your-artwork.svg
@@ -89,9 +96,9 @@ a hard finding**; advisories are reported and do not fail the run.
 | Stage | Tool | Status |
 |---|---|---|
 | 0. Print constraints (`spec.json`) | you | **built** |
-| 1. Raster prep (background removal, upscaling) | `rembg`, Real-ESRGAN | **not built** |
-| 2. Vectorisation (tracing) | Potrace, VTracer | **not built** — no test artwork traced yet |
-| 3. Cleanup & colour snapping | `snap_colors.py`, SVGO config | **partly built** (see below) |
+| 1. Raster prep (background removal, upscaling) | `prep_raster.py` + `rembg`/Real-ESRGAN (optional) | **built** — front half, check-first |
+| 2. Vectorisation (tracing) | `trace_sweep.py` (VTracer) | **built** — front half |
+| 3. Cleanup & colour snapping | `snap_colors.py`, SVGO config | **built** (SVGO needs Node — unused here) |
 | 4. Source validation (Layer A) | `validate_svg.py` | **built, 90 tests** |
 | 4b. Render preflight (Layer B) | `preflight.py` | **built, 52 tests** |
 | 5. Creative review | you / the printer | **manual** |
@@ -260,7 +267,7 @@ against 0.00–0.20% for every flat file in the batch.
 
 ## Current state — what's verified
 
-**193 tests, all passing** (`pytest tests/`), lint clean. The back half:
+**246 tests, all passing** (`pytest tests/`), lint clean. The back half:
 
 | suite | tests | covers |
 |---|---|---|
@@ -270,7 +277,8 @@ against 0.00–0.20% for every flat file in the batch.
 | `test_validate_svg_negative.py` | 4 | the four headline failure modes, as a standalone contract |
 
 The front half adds its own suites (prep, trace sweep, comparison, pick/loop,
-run record) — the remaining tests in the 193 total.
+palette variants, run record, requirements closeout); see
+`scripts/FRONT_HALF.md` and `README.md` for that coverage.
 
 **Regression guards for the two measurement traps**, with synthetic fixtures so
 they can't silently return:
@@ -334,9 +342,6 @@ does not have. The config (`scripts/svgo_print.yml`) is correct and ready for a
 machine that has it; `scripts/snap_colors.py` covers the colour half in pure
 Python.
 
-**Stage 2 (tracing) has not been exercised.** No artwork has been traced through
-the pipeline yet, so the tracer integration is untested in practice.
-
 **It doesn't replace a printed proof.** It catches the mechanical reasons files
 get rejected. It can't tell you a colour looks wrong on the chosen stock, and it
 can't tell you whether the job is *economically* right — process vs spot, ink
@@ -365,7 +370,7 @@ SPEC=other.json ./pipeline.sh x.svg            # different spec
 
 # the batch
 .venv/bin/python scripts/run_batch.py          # → 04_validated/batch_results.json
-.venv/bin/python -m pytest tests/ -q           # 193 tests
+.venv/bin/python -m pytest tests/ -q           # 246 tests
 
 # open the artwork by hand
 inkscape 00_source/art.svg
@@ -405,11 +410,15 @@ OVERVIEW.md                this document
 scripts/snap_colors.py     stage 3 — colour snapping
 scripts/svgo_print.yml     stage 3 — SVGO config (needs Node.js)
 scripts/run_batch.py       batch runner
-tests/                     193 tests
+scripts/prep_raster.py     front half — raster prep (check-first)
+scripts/trace_sweep.py     front half — VTracer candidate sweep
+scripts/compare_candidates.py  front half — Layer A/B + fidelity report
+tests/                     246 tests
 00_source/                 input artwork (+ the test batch)
-01_prepped/ 02_traced/ 03_cleaned/   stages 1–3 (2 and most of 3 unused so far)
-04_validated/              Layer A output + batch_results.json
+01_prepped/ 02_traced/ 03_cleaned/   stages 1–3 (front half writes 01/02)
+04_validated/              Layer A output + batch_results.json + comparison reports
 05_final/                  proof.png, print.pdf, manifest.json
+06_run/                    run-record JSON (archive spine)
 ```
 
 ---

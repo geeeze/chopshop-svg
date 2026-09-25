@@ -126,6 +126,7 @@ RULE_PATH_PARSE = "PATH_PARSE_ERROR"
 RULE_SPEC = "SPEC_ERROR"
 RULE_INPUT = "INPUT_ERROR"
 RULE_NODES = "NODE_COUNT"
+RULE_STROKE_SCALE = "STROKE_SCALE_TRANSFORM"
 RULE_PALETTE = "PALETTE"
 RULE_DIMENSIONS = "DIMENSIONS"
 
@@ -1097,6 +1098,70 @@ def check_stroke_widths(root, styles, min_pt, failures,
         ))
 
 
+def _has_scale_transform(element):
+    """True if *element* or any ancestor has a transform containing scale()."""
+    node = element
+    while node is not None:
+        tr = node.get("transform")
+        if tr and "scale(" in tr.lower():
+            return True
+        parent = node.getparent()
+        if parent is None or not isinstance(parent.tag, str):
+            break
+        node = parent
+    return False
+
+
+def check_stroke_scale_advisory(root, styles, notes, stats):
+    """Emit an advisory when a scale transform is in scope of a stroked element.
+
+    The stroke-width check measures in user units and does not apply
+    ``transform="scale(...)"`` on the element or its ancestors.  A
+    ``stroke-width="10"`` inside ``<g transform="scale(0.01)">`` is ~0.28pt
+    in reality but passes a 1.5pt minimum.  VTracer output only uses
+    ``translate`` so the front half is safe, but hand-authored or
+    Illustrator SVGs are not.  This advisory makes the gap visible without
+    failing the job (the real width cannot be computed without a full
+    transform stack).
+    """
+    counter = [0]
+    warned = []
+
+    def visit(element, scope_stroke):
+        name = _localname(element).lower()
+        stroke_raw, _ = styles.get(element, "stroke")
+        if stroke_raw is None:
+            stroke_raw = scope_stroke[0]
+        stroke_text = (stroke_raw or "").strip()
+        stroking = bool(stroke_text) and stroke_text.lower() not in _NOT_STROKED_VALUES
+
+        if stroking and name not in _NON_PAINTING:
+            counter[0] += 1
+            if _has_scale_transform(element):
+                label = _describe(element, counter[0])
+                warned.append(label)
+
+        for child in element:
+            if isinstance(child.tag, str):
+                visit(child, (stroke_text,))
+
+    root_stroke, _ = styles.get(root, "stroke")
+    visit(root, (root_stroke,))
+
+    for label in warned[:10]:
+        notes.append(
+            "%s: %s is stroked but a transform=scale() is in scope; the "
+            "stroke-width is measured in user units and the scale is not "
+            "applied, so the real stroke may be thinner than reported"
+            % (RULE_STROKE_SCALE, label))
+    if len(warned) > 10:
+        notes.append(
+            "%s: ...and %d more stroked element%s with a scale transform "
+            "in scope" % (RULE_STROKE_SCALE, len(warned) - 10,
+                          "" if len(warned) - 10 == 1 else "s"))
+    stats["stroke_scale_advisories"] = len(warned)
+
+
 # --------------------------------------------------------------------------
 # Rule 4: path geometry
 # --------------------------------------------------------------------------
@@ -1382,6 +1447,12 @@ def validate(svg_path, spec_path):
     except Exception as exc:                          # noqa: BLE001
         failures.append((RULE_STROKE, "stroke width check crashed: %s: %s"
                          % (type(exc).__name__, exc)))
+
+    try:
+        check_stroke_scale_advisory(root, styles, notes, stats)
+    except Exception as exc:                          # noqa: BLE001
+        notes.append("stroke scale advisory check crashed: %s: %s"
+                     % (type(exc).__name__, exc))
 
     try:
         check_path_geometry(root, spec["allow_open_paths"], failures,

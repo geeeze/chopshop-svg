@@ -233,32 +233,22 @@ pure Python.
 
 ## Changing the rules
 
-Edit `spec.json`. Everything under `print` is optional.
+Edit `spec.json`. Everything under `print` is optional; any omitted key falls
+back to its default. The complete field-by-field reference (top-level,
+`geometry`, `validation`, and `print`, with defaults and meanings) is in the
+**"The job contract"** section of `README.md` — it is the single canonical
+table, so it is not duplicated here.
 
-| Setting | Default | What it does |
-|---|---|---|
-| `print_method` | — | `vinyl`/`plotter` require closed outlines; others tolerate open strokes. |
-| `max_colors` | — | Ink budget, applied to declared *and* rendered counts. |
-| `palette` | — | Colours checked against this list (advisory), and used by `snap_colors.py`. |
-| `dimensions` | — | Order size in mm. A mismatch is a hard gate. |
-| `require_cmyk` | false | Demand an exact CMYK reading; fails on RGB input. |
-| `ink_limit_percent` | 300 | Total area coverage limit. |
-| `icc_profile_path` | null | Printer-supplied profile, used for RGB→CMYK. |
-| `geometry.min_stroke_width_pt` | 0 | Thinnest stroke that survives. 1.5pt ≈ 0.53mm. |
-| `geometry.max_nodes_per_path` | — | Tracing bloat limit. Advisory. |
-| `geometry.allow_raster_embed` | false | Whether bitmaps are allowed. |
-| `geometry.allow_open_paths` | false | Unclosed outlines; derived from `print_method` when absent. |
-| `geometry.allow_gradients` | false | Set true for CMYK process work. |
-| `geometry.gradient_handling` | — | `embedded_raster` downgrades continuous tone to advisory. |
-| `print.dpi` | 300 | Proof and measurement resolution. |
-| `print.min_image_ppi` | 300 | Effective resolution floor for placed images. |
-| `print.ink_area_threshold_percent` | 0.05 | How much of the sheet a colour must cover to count as an ink. |
-| `print.ink_merge_tolerance` | 20 | How close two colours are to count as one ink. |
-| `print.tone_min_area_percent` | 3.0 | How much of the sheet tone must cover to be flagged. |
-| `print.tone_min_colors` | 2000 | And how many distinct colours must be involved. |
-| `print.require_embedded_fonts` | false | Make non-embedded fonts a hard gate. |
-| `print.dark_garment_underbase` | false | The job prints a white underbase first. Adds a white screen to the count and implies `count_white_as_ink`. |
-| `print.ink_blend_tolerance` | 24 | How far off a colour-space segment an antialiasing blend may be. Shape, not distance, is the final test. |
+Two knobs deserve the extra context the table can't carry:
+
+- **`print.dark_garment_underbase`** — see "Read this first if the shirts aren't
+  white" above. This is the one setting that depends on the *garment*, not the
+  artwork, and the tool warns you when it thinks you've got it wrong.
+- **`print.ink_merge_tolerance` / `ink_blend_tolerance` / `tone_min_*`** — these
+  are the boundaries between "a deliberate ink", "an antialiasing edge", and
+  "continuous tone". The ink-counting section above explains what each one does
+  and the measurements that set the defaults; don't tune them without reading
+  that first.
 
 ---
 

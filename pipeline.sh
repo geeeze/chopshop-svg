@@ -85,6 +85,7 @@ echo "--- stage 4: source validation (Layer A) ---"
 CODE_A="${PIPESTATUS[0]}"
 
 CODE_B=0
+LAYER_B_RAN=0
 if [ "$LAYER_A_ONLY" -eq 1 ]; then
   echo
   echo "--- stage 4b: render preflight (Layer B) -- SKIPPED (--layer-a-only) ---"
@@ -116,6 +117,7 @@ else
   done
   [ -f "$STAGE_B_DIR/${STEM}.manifest.json" ] && \
       cp -f "$STAGE_B_DIR/${STEM}.manifest.json" "$STAGE_B_DIR/${RUN_ID}.manifest.json"
+  LAYER_B_RAN=1
 fi
 
 echo
@@ -123,7 +125,11 @@ echo "$BANNER"
 if [ "$CODE_A" -eq 0 ] && [ "$CODE_B" -eq 0 ]; then
   echo "PIPELINE PASSED -- $STEM"
   echo "  layer A (source): ok"
-  [ "$LAYER_A_ONLY" -eq 1 ] && echo "  layer B (render): not run" || echo "  layer B (render): ok"
+  if [ "$LAYER_B_RAN" -eq 1 ]; then
+    echo "  layer B (render): ok"
+  else
+    echo "  layer B (render): not run"
+  fi
   [ -f "$STAGE_B_DIR/${STEM}.manifest.json" ] && echo "  manifest: $STAGE_B_DIR/${STEM}.manifest.json"
   exit 0
 fi

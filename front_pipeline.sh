@@ -39,14 +39,16 @@ SWEEP=""
 SKIP_PREP=0
 FIX_PREP=0
 LOOP=0
-for arg in "$@"; do
-  case "$arg" in
-    --sweep=*) SWEEP="${arg#--sweep=}" ;;
-    --skip-prep) SKIP_PREP=1 ;;
-    --fix) FIX_PREP=1 ;;
-    --loop) LOOP=1 ;;
-    -*) echo "unknown option: $arg" >&2; usage ;;
-    *) INPUT="$arg" ;;
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --sweep)  SWEEP="$2"; shift 2 ;;
+    --sweep=*) SWEEP="${1#--sweep=}"; shift ;;
+    --skip-prep) SKIP_PREP=1; shift ;;
+    --fix) FIX_PREP=1; shift ;;
+    --loop) LOOP=1; shift ;;
+    -h|--help) usage ;;
+    -*) echo "unknown option: $1" >&2; usage ;;
+    *) INPUT="$1"; shift ;;
   esac
 done
 

@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "_note": "Chopshop-Aided-Design palette library. Each palette recolours an existing trace so the CAD structure (geometry, nodes, layout) is untouched -- only the colour vectors change. 'background' names the entry that should take the largest area of the source; 'colours' is the full set, ordered background-first then by role importance. An optional 'map' pins exact source->target pairs and always wins over the heuristic.",
+  "_roles": {
+    "background": "largest-area colour in the source becomes this",
+    "primary": "the main motif colour (flowers)",
+    "secondary": "foliage / stems",
+    "light": "highlights and blossoms",
+    "accent": "small accents"
+  },
+  "palettes": [
+    {
+      "id": "red-cream",
+      "name": "Red & White on Cream",
+      "note": "Bold painterly red and off-white flowers, dark green/brown foliage, clean cream ground. Bright, classic, vintage.",
+      "background": "#f2ebdd",
+      "colours": ["#f2ebdd", "#c1272d", "#faf7f0", "#3a5a32", "#6b4a2f"],
+      "map": {}
+    },
+    {
+      "id": "blue-charcoal",
+      "name": "Light Blue & White on Charcoal",
+      "note": "Soft ethereal cyan-blue flowers with pale blue accents, white/silver foliage, dark charcoal ground. Moody, elegant, gallery.",
+      "background": "#3a4046",
+      "colours": ["#3a4046", "#8ecae6", "#cfe8f3", "#f4f4f2", "#7a8894"],
+      "map": {}
+    },
+    {
+      "id": "turquoise-black",
+      "name": "Turquoise & White on Black",
+      "note": "Vibrant turquoise flowers with deeper blue shading, white/silver foliage, solid black ground. High contrast, dramatic, night-time.",
+      "background": "#000000",
+      "colours": ["#000000", "#2fd4c4", "#1b6ca8", "#f2f2f2"],
+      "map": {}
+    },
+    {
+      "id": "cool-luxe",
+      "name": "Cool & Luxe",
+      "note": "Deep plum and sage for an expensive, moody elegance; ivory blossoms for softness; charcoal background with metallic silver accents. High-end hotel linens and gallery walls.",
+      "background": "#36454f",
+      "colours": ["#36454f", "#5b2c6f", "#9caf88", "#f5f0e1", "#c0c0c0"],
+      "map": {}
+    },
+    {
+      "id": "warm-sunny",
+      "name": "Warm & Sunny",
+      "note": "Fiery terracotta and burnt orange for golden-hour warmth; mustard accents on the flowers; cream base with olive-green foliage. Summer tables and picnics.",
+      "background": "#fff6e5",
+      "colours": ["#fff6e5", "#cc5500", "#e2725b", "#e1ad01", "#6b8e23"],
+      "map": {}
+    },
+    {
+      "id": "pop-playful",
+      "name": "Pop & Playful",
+      "note": "Pastel rainbow bursts on the petals, crisp black background for maximum punch, tiny lime-green buds. Bold, joyful, collect-the-whole-set energy.",
+      "background": "#000000",
+      "colours": ["#000000", "#ff4fa3", "#b6ff3c", "#9bd8f5", "#fff06a", "#7fe7c4"],
+      "map": {}
+    }
+  ]
+}

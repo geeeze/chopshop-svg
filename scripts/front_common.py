@@ -173,10 +173,11 @@ def run_parallel(fn, tasks, workers=None):
     workers = max(1, int(workers))
     if workers <= 1 or len(tasks) <= 1:
         return [fn(t) for t in tasks]
+    from concurrent.futures import ProcessPoolExecutor
+    from concurrent.futures.process import BrokenProcessPool
     try:
-        from concurrent.futures import ProcessPoolExecutor
         with ProcessPoolExecutor(max_workers=workers,
                                  initializer=_worker_init) as executor:
             return list(executor.map(fn, tasks))
-    except Exception:
+    except (BrokenProcessPool, OSError):
         return [fn(t) for t in tasks]

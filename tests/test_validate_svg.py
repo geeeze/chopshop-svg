@@ -298,6 +298,19 @@ class TestStrokeWidth:
         code, out = run(capsys, svg, spec_file())
         assert code == 0, out
 
+    def test_stroke_scale_transform_emits_advisory(self, capsys, svg_file,
+                                                   spec_file):
+        """A stroked element inside transform=scale() gets an advisory note,
+        not a hard failure — the real width cannot be computed without a
+        full transform stack."""
+        body = ('<g transform="scale(0.01)">'
+                '<rect width="100" height="100" stroke="#000000" '
+                'stroke-width="10"/></g>')
+        code, out = run(capsys, svg_file(body), spec_file())
+        assert code == 0, "advisory should not fail: %s" % out
+        assert "STROKE_SCALE_TRANSFORM" in out, (
+            "missing scale advisory in:\n%s" % out)
+
     def test_inherited_stroke_width_checked(self, capsys, svg_file, spec_file):
         """A path stroked by its parent <g> at 0.5pt must still fail."""
         svg = svg_file('<g stroke="#000000" stroke-width="0.5pt">'

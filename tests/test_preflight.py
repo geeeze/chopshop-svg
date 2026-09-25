@@ -25,6 +25,7 @@ small (150 dpi, 40mm documents).
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -39,6 +40,12 @@ import validate_svg                   # noqa: E402
 from preflight import ADVISORY, HARD  # noqa: E402
 
 DPI = 150
+
+# Skip tests that shell out to inkscape/gs/qpdf/poppler when those are absent.
+needs_render = pytest.mark.skipif(
+    any(shutil.which(t) is None
+        for t in ("inkscape", "gs", "qpdf", "pdfinfo", "pdfimages")),
+    reason="missing render tools (inkscape/gs/qpdf/poppler-utils)")
 
 
 # --------------------------------------------------------------------------
@@ -137,6 +144,7 @@ def cmyk_patches(tmp_path_factory):
 # 1. Ink measurement: the calibration regressions
 # --------------------------------------------------------------------------
 
+@needs_render
 class TestInkMeasurement:
     """These fail if the tiffsep polarity or the ICC handling regresses."""
 
@@ -222,6 +230,7 @@ class TestInkMeasurement:
         assert stats["ink_tac_area_over_limit_percent"] > 0
 
 
+@needs_render
 class TestGarmentAssumption:
     """White is an ink on a dark garment and not on a light one.
 
@@ -275,6 +284,7 @@ class TestGarmentAssumption:
         assert "assumes the garment is white" not in " ".join(notes)
 
 
+@needs_render
 class TestDarkGarmentUnderbase:
     """The underbase is a screen, and it has to be counted as one.
 
@@ -377,6 +387,7 @@ class TestDarkGarmentUnderbase:
 # 2. Colour space must come from the bytes, not from inkcov
 # --------------------------------------------------------------------------
 
+@needs_render
 class TestColourSpace:
     def test_rgb_pdf_is_detected_as_rgb(self, tmp_path, workdir):
         """inkcov answers "CMYK" for an RGB file; the byte scan must not."""
@@ -405,6 +416,7 @@ class TestColourSpace:
 # 3. Rendered colour counting: what Layer A structurally cannot see
 # --------------------------------------------------------------------------
 
+@needs_render
 class TestRenderedColours:
     def test_gradient_is_caught_after_passing_layer_a(self, tmp_path, workdir):
         """The headline case from the v4.0 document.

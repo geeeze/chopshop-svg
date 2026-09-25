@@ -504,44 +504,66 @@ def _blend_target(rgb, anchors, blend_tolerance):
     Returns ``(owner, other_endpoint, gap)`` or None.  Geometry alone is not
     enough to decide: a deliberate 10% tint lies on the same line as a blend,
     so the caller also applies the size test in BLEND_MAX_RATIO.
+
+    Vectorised with numpy: the O(n²) pairwise projection loop is computed in
+    one broadcast instead of nested Python iteration.  At the 500-cluster cap
+    this replaces ~125k pure-Python inner iterations per stray colour with a
+    handful of vectorised array ops.
     """
-    best = None
-    for i in range(len(anchors)):
-        a_rgb, a_cluster = anchors[i]
-        for j in range(i + 1, len(anchors)):
-            b_rgb, b_cluster = anchors[j]
-            ab = (b_rgb[0] - a_rgb[0], b_rgb[1] - a_rgb[1], b_rgb[2] - a_rgb[2])
-            ab_len2 = ab[0] ** 2 + ab[1] ** 2 + ab[2] ** 2
-            # Two anchors closer than this do not define a usable blend line.
-            if ab_len2 <= (2.0 * blend_tolerance) ** 2:
-                continue
-            ac = (rgb[0] - a_rgb[0], rgb[1] - a_rgb[1], rgb[2] - a_rgb[2])
-            t = (ac[0] * ab[0] + ac[1] * ab[1] + ac[2] * ab[2]) / float(ab_len2)
-            if t <= 0.0 or t >= 1.0:
-                continue            # outside the segment: not a blend of these
-            projected = (a_rgb[0] + t * ab[0], a_rgb[1] + t * ab[1],
-                         a_rgb[2] + t * ab[2])
-            gap = sum((rgb[k] - projected[k]) ** 2 for k in range(3)) ** 0.5
-            if gap > blend_tolerance:
-                continue
-            # Absorb into the DOMINANT ink of the pair, never into the nearer
-            # one. Antialiasing along a line lays down a *chain* of greys, so
-            # picking the nearest neighbour makes each grey compare itself
-            # against the next grey -- every one of them equally small -- and
-            # the whole chain survives as phantom inks. The dominant endpoint
-            # resolves the whole chain onto the real ink. Measured: eighteen
-            # 0.85pt rules reported 4 inks instead of 1 before this.
-            if a_cluster is None:
-                chosen, other = b_cluster, None
-            elif b_cluster is None:
-                chosen, other = a_cluster, None
-            elif a_cluster["share"] >= b_cluster["share"]:
-                chosen, other = a_cluster, b_cluster
-            else:
-                chosen, other = b_cluster, a_cluster
-            if chosen is not None and (best is None or gap < best[2]):
-                best = (chosen, other, gap)
-    return best
+    n = len(anchors)
+    if n < 2:
+        return None
+
+    pts = np.array([a[0] for a in anchors], dtype=np.float64)
+    clusters = [a[1] for a in anchors]
+    q = np.asarray(rgb, dtype=np.float64)
+
+    # Pairwise AB vectors (pts[j] - pts[i]) and squared lengths.
+    AB = pts[None, :, :] - pts[:, None, :]          # n×n×3
+    AB_len2 = (AB ** 2).sum(axis=2)                   # n×n
+
+    # Projection parameter t[i,j] = dot(q-A_i, A_j-A_i) / |A_j-A_i|^2.
+    AC = q - pts                                      # n×3
+    safe_len2 = np.where(AB_len2 > 0, AB_len2, 1.0)
+    t = np.einsum('ik,ijk->ij', AC, AB) / safe_len2   # n×n
+
+    # Valid: 0 < t < 1, separation > 2*tol, at least one anchor is ink (not
+    # both paper).
+    min_sep2 = (2.0 * blend_tolerance) ** 2
+    is_ink = np.array([c is not None for c in clusters])
+    has_ink = is_ink[:, None] | is_ink[None, :]
+    valid = (t > 0.0) & (t < 1.0) & (AB_len2 > min_sep2) & has_ink
+
+    if not np.any(valid):
+        return None
+
+    # Perpendicular gap = |q - projected| for valid pairs.
+    projected = pts[:, None, :] + t[:, :, None] * AB  # n×n×3
+    gap = np.sqrt(((q - projected) ** 2).sum(axis=2))
+    gap_masked = np.where(valid & (gap <= blend_tolerance), gap, np.inf)
+
+    if not np.any(np.isfinite(gap_masked)):
+        return None
+
+    # Minimum gap (first occurrence in row-major order, matching the original
+    # i<j iteration's "first wins on tie" semantics).
+    flat = int(np.argmin(gap_masked))
+    i, j = divmod(flat, n)
+    best_gap = float(gap_masked[i, j])
+
+    a_cluster, b_cluster = clusters[i], clusters[j]
+    if a_cluster is None:
+        chosen, other = b_cluster, None
+    elif b_cluster is None:
+        chosen, other = a_cluster, None
+    elif a_cluster["share"] >= b_cluster["share"]:
+        chosen, other = a_cluster, b_cluster
+    else:
+        chosen, other = b_cluster, a_cluster
+
+    if chosen is not None:
+        return (chosen, other, best_gap)
+    return None
 
 
 # --------------------------------------------------------------------------

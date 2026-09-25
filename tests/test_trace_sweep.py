@@ -6,6 +6,7 @@ Uses the vtracer Python API (installed in .venv) as the tracer.  Synthetic
 fixtures only; nothing here touches 00_source/.
 """
 
+import importlib.util
 import json
 import os
 import sys
@@ -21,6 +22,13 @@ for p in (ROOT, SCRIPTS):
 
 import trace_sweep  # noqa: E402
 from lxml import etree  # noqa: E402
+
+# find_spec rather than try/import: pyflakes still flags an unused import even
+# with a `# noqa` comment, because noqa is flake8's feature, not pyflakes'.
+_has_vtracer = importlib.util.find_spec("vtracer") is not None
+
+pytestmark = pytest.mark.skipif(
+    not _has_vtracer, reason="vtracer not installed")
 
 
 def make_spec(tmp_path, allow_gradients=False, palette=None, sweep_max=None):
@@ -163,6 +171,61 @@ def test_exit_3_when_no_tracer_available(tmp_path, monkeypatch):
     monkeypatch.setattr(trace_sweep, "detect_backend", lambda: (None, []))
     code = trace_sweep.main([png, spec, "--out-dir", str(tmp_path / "traced")])
     assert code == 3
+
+
+def test_preset_params_override():
+    """A sweep JSON with preset_params overrides/adds preset parameter sets."""
+    sweep = {
+        "version": 1,
+        "presets": ["poster_flat"],
+        "preset_params": {
+            "poster_flat": {
+                "colormode": "color", "mode": "spline",
+                "color_precision": 2, "layer_difference": 16,
+            }
+        },
+        "filter_speckle": [2],
+        "hierarchical": ["cutout"],
+        "use_palette": [False],
+        "max_candidates": 12,
+    }
+    spec = {
+        "print_method": "screen_print", "max_colors": 6,
+        "geometry": {"allow_gradients": False}, "palette": [],
+    }
+    available = {"colormode", "mode", "color_precision", "layer_difference",
+                 "filter_speckle", "hierarchical"}
+    candidates, skipped = trace_sweep.build_candidates(
+        sweep, spec, available, "test")
+    assert len(candidates) == 1
+    assert candidates[0]["preset"] == "poster_flat"
+    assert candidates[0]["params"]["color_precision"] == 2
+    assert candidates[0]["params"]["layer_difference"] == 16
+
+
+def test_round_robin_truncation_distributes_speckles():
+    """With a palette and cap 12, speckle=16 is still traced (not all
+    speckle=2).  Before the round-robin fix the cap took only speckle=2."""
+    sweep = {
+        "version": 1,
+        "presets": ["bw", "poster"],
+        "filter_speckle": [2, 8, 16],
+        "hierarchical": ["cutout"],
+        "use_palette": [False, True],
+        "max_candidates": 12,
+    }
+    spec = {
+        "print_method": "screen_print", "max_colors": 6,
+        "geometry": {"allow_gradients": False},
+        "palette": ["#000000", "#FFFFFF"],
+    }
+    available = {"colormode", "mode", "color_precision", "layer_difference",
+                 "filter_speckle", "hierarchical"}
+    candidates, _ = trace_sweep.build_candidates(
+        sweep, spec, available, "test")
+    # Total = 2 presets × 3 speckles × 1 hier × 2 palettes = 12, capped at 12
+    speckles = {c["filter_speckle"] for c in candidates}
+    assert speckles == {2, 8, 16}, "round-robin must include all speckles"
 
 
 def test_parallel_matches_sequential(tmp_path):
