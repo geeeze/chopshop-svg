@@ -112,6 +112,34 @@ Reading this:
   max 234 — *more* nodes at a more aggressive setting. So the threshold is not a
   clean dial, which rules it out as a parameter a deterministic loop can walk.
 
+### 1d. No fixed threshold generalises
+
+The gate-clearing threshold on `candidate_09` is **0.0002**, which leaves a
+**0.2% margin** (max 499 against a limit of 500). Testing whether that value
+transfers to a heavier candidate says no:
+
+| candidate | max nodes | clears at | ink lost at clearance |
+|---|---|---|---|
+| `candidate_09` | 826 | 0.0002 | 1.639% |
+| `candidate_04` | 2 364 | **0.0008** | **1.050%** |
+
+Three things follow, none of them convenient:
+
+- **The threshold differs by 4x** between two candidates. A single configured
+  value cannot serve both.
+- **The ink cost at clearance is not predicted by node count.** The file with
+  2.9x more nodes needed 4x the threshold and paid *less* ink (1.05% vs 1.64%).
+  So the price of clearing the gate has to be measured per file, not assumed.
+- **The response is cliff-like, not gradual.** On `candidate_04`, threshold
+  0.0004 still had 1 path over the limit (max 723); 0.0008 cleared it (max 402).
+  Bisecting for the minimum clearing threshold is therefore not cheap.
+
+And a genuine hazard for any automated loop: at threshold `2e-05` on
+`candidate_04`, Inkscape **increased** the worst node count above the original —
+2 364 → 2 752 — while reporting a successful simplify and losing 0.010% of the
+ink. A run that naively re-simplifies could make a path *worse*. Any wrapper must
+compare against the input and reject a step that regresses `path_nodes_max`.
+
 ## 2. The retrace route is too weak on its own
 
 VTracer's pip API exposes four curve-fitting parameters the repo's `PRESETS`
@@ -217,8 +245,15 @@ shipping something strictly worse than a tool already on the box.
    best, and it perturbs least. Treat the two problems as work to wrap, not
    reasons to reject it:
    - threshold control → write a scoped `preferences.xml` and point `HOME` at it
-   - gate targeting → iterate the threshold to the smallest value that clears
-     `max_nodes_per_path`, since the default is 12x more aggressive than needed
+   - gate targeting → **escalate the threshold per file** until
+     `path_nodes_max <= max_nodes_per_path`. A fixed value provably does not
+     transfer (4x spread between two candidates, §1d), and the gate-clearing
+     value leaves a 0.2% margin on the file it was tuned for. Budget a bounded
+     escalation, and expect a cliff rather than a slope.
+   - **reject regressions** → compare `path_nodes_max` against the input and
+     refuse a result that is worse. Inkscape can *increase* the worst node count
+     at low thresholds (§1d), so "it simplified successfully" is not evidence of
+     improvement.
    - **verification → render before/after and report ink drift and gap blobs.**
      Nothing in the toolchain does this today, and it is what caught the 18%
      ink loss. This is the single most valuable addition.
@@ -229,7 +264,9 @@ shipping something strictly worse than a tool already on the box.
    provides one.
 5. **Keep `geometry_overload` out of the automated loop until (3) exists.** A
    remediation that silently loses 18% of the ink is worse than one that stops
-   and says `not_loopable`.
+   and says `not_loopable`. Note also that the achievable ink cost is
+   per-file and unpredictable (§1d), so a loop needs the measurement to know
+   whether a remedy succeeded, not just the node count.
 
 ## 6. Reproduction
 
