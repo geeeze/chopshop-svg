@@ -215,7 +215,8 @@ def _fmt(entry):
 def _sweep_summary(sweep_entry):
     if not sweep_entry:
         return "-"
-    return "preset=%s speckle=%s hier=%s palette=%s" % (
+    return "variant=%s preset=%s speckle=%s hier=%s palette=%s" % (
+        sweep_entry.get("variant", "source"),
         sweep_entry.get("preset", "-"),
         sweep_entry.get("filter_speckle", "-"),
         sweep_entry.get("hierarchical", "-"),
@@ -243,6 +244,20 @@ def _resolve_source(sweep_payload, source_flag):
         if path and os.path.exists(path):
             return path
     return None
+
+
+def _candidate_source(sweep_entry, default_source):
+    """The raster a candidate should be diffed against for fidelity.
+
+    A pitch-shift candidate (inverse/pitch) was traced from a *derived* raster,
+    not the prepped source, so diffing it against the original source would
+    report a misleadingly large MAE.  When the sweep record names the variant's
+    own raster (``variant_input``), diff against that instead.
+    """
+    vi = (sweep_entry or {}).get("variant_input")
+    if vi and os.path.exists(vi):
+        return vi
+    return default_source
 
 
 def _fidelity(svg_path, source_png, workdir, timeout=300):
@@ -471,8 +486,9 @@ def _compare(traced_dir, spec_path, out_dir=None, source_flag=None, workers=None
     for cand in candidates:
         svg_path = os.path.join(traced_dir, cand["file"])
         cw = os.path.join(workdir, os.path.splitext(cand["file"])[0])
+        cand_source = _candidate_source(cand.get("sweep"), source_png)
         tasks.append({"svg_path": svg_path, "spec_path": spec_path,
-                      "workdir": cw, "source_png": source_png})
+                      "workdir": cw, "source_png": cand_source})
 
     workers_n = fc.resolve_workers(len(tasks), explicit=workers)
     print("compare_candidates: %d candidate(s), %d worker process(es)"
