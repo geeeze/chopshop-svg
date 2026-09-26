@@ -6,8 +6,13 @@ compare_candidates.py -- run every trace candidate through Layers A and B.
 Given a ``02_traced/<stem>/`` directory, this runs each candidate SVG through
 Layer A (validate_svg.py, source-level) and Layer B (preflight.py, rendered),
 then writes a human-readable table and a machine-readable JSON.  It records
-metrics and tradeoffs; it deliberately does NOT pick a winner -- the sweep
-parameters and the numbers are laid out so a human (or GPT/Astra) can choose.
+metrics and tradeoffs and lays out the sweep parameters for a human to choose
+-- with ONE exception.  A candidate is ranked on whether the artwork survived
+the trace at all, because "no gate fired" is not the same as "it is the
+design": a bw/binary trace of a colour image discards the whole artwork and
+still reports hard=0. Measured on the shipped example, all six bw candidates
+came back clean with artwork MAE 104.2 against 0.005 for the faithful ones,
+and sorting on gates alone ranked them level. See ``_fidelity_verdict``.
 
 For each candidate it records: filename, sweep parameters, Layer A and Layer B
 result (pass/fail + findings), declared colour count, rendered ink count, node
@@ -317,6 +322,57 @@ def _fidelity(svg_path, source_png, workdir, timeout=300):
         return {"measured": False, "note": "%s: %s" % (type(exc).__name__, exc)}
 
 
+# How far a candidate may drift from its source on the ARTWORK before it is
+# called a fidelity failure. Measured on the shipped example: the six
+# colour-preserving candidates read mae_art 0.005, and the six bw/binary ones
+# read 104.214 -- a factor of ~20,000. Anything in between is not a gap in the
+# measurements, it is a different job, so the threshold sits low and the
+# comparison is meant to be a cliff rather than a curve.
+MAE_ART_FAIL = 8.0
+# A candidate that renders fewer distinct inks than the source declared has
+# discarded colour, whatever the gate says. On the example the bw preset
+# declares 1 colour for a 5-colour source and still passes both layers.
+MIN_COLOUR_RETENTION = 0.5
+
+
+def _fidelity_verdict(record):
+    """Did this candidate keep the artwork? Returns (verdict, reason).
+
+    This exists because "passed" only means no GATE fired. A bw/binary trace of
+    a colour image discards the entire design and can still come back clean:
+    on the shipped example all six bw candidates report passed=True, hard=0,
+    advisory=0 -- while mae_art is 104.2 against 0.005 for the colour ones.
+    Sorted purely on gates, they rank level with the faithful candidates and
+    the table shows nothing that distinguishes them.
+
+    This is deliberately NOT a gate. Fidelity is advisory: a deliberately
+    simplified single-colour job is legitimate, and a hard failure here would
+    reject it. What it must not do is be invisible.
+    """
+    fid = record.get("fidelity") or {}
+    mae_art = fid.get("mae_art")
+    declared = record.get("declared_colors")
+    rendered = record.get("rendered_ink_colors")
+
+    if mae_art is not None and mae_art > MAE_ART_FAIL:
+        return "artwork_lost", (
+            "artwork MAE %.1f exceeds %.1f -- the trace does not reproduce the "
+            "design; check colormode (binary/bw discards colour)"
+            % (mae_art, MAE_ART_FAIL))
+
+    if declared and rendered is not None:
+        # rendered_ink_colors counts what the render produced, which includes
+        # the background, so only a large shortfall is meaningful.
+        if rendered < declared * MIN_COLOUR_RETENTION:
+            return "colour_dropped", (
+                "render kept %s of %s declared colours -- some of the design "
+                "was dropped" % (rendered, declared))
+
+    if mae_art is not None and mae_art > 1.0:
+        return "drift", "artwork MAE %.2f -- small but measurable drift" % mae_art
+    return "faithful", "artwork MAE %s" % ("n/a" if mae_art is None else mae_art)
+
+
 def _fidelity_cell(fid):
     """Compact "MAE all / MAE art" string for the table."""
     if not fid or not fid.get("measured"):
@@ -338,17 +394,19 @@ def _build_markdown(traced_dir, spec_path, candidates, layers):
                  % ("available" if layers["a"] else "NOT AVAILABLE"))
     lines.append("- layer B (render preflight): %s"
                  % ("available" if layers["b"] else "NOT AVAILABLE"))
-    lines.append("- sorted by: fewest hard gates failed, then fewest advisories")
+    lines.append("- sorted by: fewest hard gates failed, then whether the "
+                 "artwork survived the trace, then fewest advisories")
     lines.append("")
     lines.append("| # | file | sweep | LayerA | LayerB | declared | inks | "
-                 "nodes (total/max) | size | MAE all/art | hard | adv |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
+                 "nodes (total/max) | size | MAE all/art | hard | adv | "
+                 "fidelity |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for idx, cand in enumerate(candidates, 1):
         nodes = "-"
         if cand["node_count_total"] is not None:
             nodes = "%s/%s" % (cand["node_count_total"],
                                cand["node_count_max"])
-        lines.append("| %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %d | %d |"
+        lines.append("| %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %d | %d | %s |"
                      % (idx, cand["file"],
                         _sweep_summary(cand.get("sweep")),
                         _status_mark(cand["layer_a"]["status"]),
@@ -361,7 +419,8 @@ def _build_markdown(traced_dir, spec_path, candidates, layers):
                         cand["file_size"] if cand["file_size"] is not None
                         else "-",
                         _fidelity_cell(cand.get("fidelity")),
-                        cand["hard"], cand["advisory"]))
+                        cand["hard"], cand["advisory"],
+                        cand.get("fidelity_verdict") or "-"))
 
     # Fidelity ranking (the "accuracy" view).  Only when a source was diffed.
     measured = [c for c in candidates
@@ -376,7 +435,14 @@ def _build_markdown(traced_dir, spec_path, candidates, layers):
         lines.append("Rendered back to the source resolution and diffed against "
                      "the source raster. Lower MAE = closer to the original. "
                      "`MAE art` ignores the background and measures the subject "
-                     "only. This is the accuracy view; it does NOT pick a winner.")
+                     "only.")
+        lines.append("")
+        lines.append("A candidate can pass every gate and still not be the "
+                     "artwork: a `bw`/binary trace of a colour image discards "
+                     "the design entirely and comes back with hard=0. The "
+                     "verdict column above is that check, and the main table is "
+                     "sorted on it. It is advisory, not a gate -- a "
+                     "single-colour job is a legitimate ask.")
         lines.append("")
         lines.append("| rank | file | MAE all | MAE art | P95 | within-10 |")
         lines.append("|---|---|---|---|---|---|")
@@ -512,7 +578,39 @@ def _compare(traced_dir, spec_path, out_dir=None, source_flag=None, workers=None
                  record["layer_b"]["status"], record["hard"],
                  record["advisory"], fid_str))
 
-    records.sort(key=lambda c: (c["hard"], c["advisory"]))
+    # Attach the fidelity verdict before sorting, so a candidate that discarded
+    # the artwork cannot rank level with one that reproduced it.
+    for record in records:
+        verdict, reason = _fidelity_verdict(record)
+        record["fidelity_verdict"] = verdict
+        record["fidelity_reason"] = reason
+        fid = record.get("fidelity") or {}
+        if verdict == "artwork_lost":
+            # Surfaced as an advisory so it reaches the UI, but the gates are
+            # untouched: a single-colour job is a legitimate ask.
+            record["advisory"] = record.get("advisory", 0) + 1
+            record.setdefault("layer_b", {}).setdefault("findings", []).append({
+                "rule": "FIDELITY_ARTWORK_LOST",
+                "severity": "advisory",
+                "layer": "layer_b",
+                "detail": reason,
+            })
+            if "layer_b" in record:
+                record["layer_b"]["advisory"] = record["layer_b"].get("advisory", 0) + 1
+
+    # Gates first, then: did it keep the artwork, then how faithful. Without the
+    # middle term the bw candidates -- which pass every gate while throwing the
+    # design away -- sort alongside the real ones.
+    #
+    # The ranks count DOWN, because the sort is ascending and the best candidate
+    # has to come first. Ranking "artwork_lost" as 0 put the six candidates that
+    # discarded the design at the top of the table, which is the exact opposite
+    # of the fix. Caught by test_faithful_candidates_sort_above_artwork_lost.
+    _FID_RANK = {"faithful": 0, "drift": 1,
+                 "colour_dropped": 2, "artwork_lost": 3}
+    records.sort(key=lambda c: (c["hard"], _FID_RANK.get(
+        c.get("fidelity_verdict"), 2), c["advisory"],
+        (c.get("fidelity") or {}).get("mae_art") or 0.0))
 
     common_rules = None
     for record in records:
@@ -529,7 +627,11 @@ def _compare(traced_dir, spec_path, out_dir=None, source_flag=None, workers=None
         "candidate_count": len(records),
         "layers_available": layers,
         "common_findings": common_rules,
-        "sort": "fewest hard gates failed, then fewest advisories",
+        "sort": ("fewest hard gates failed, then whether the artwork survived "
+                 "(faithful < drift < colour_dropped < artwork_lost), then "
+                 "fewest advisories, then lowest artwork MAE"),
+        "fidelity_verdicts": sorted({r.get("fidelity_verdict")
+                                     for r in records}),
         "candidates": records,
     }
     fc.write_json(os.path.join(out_dir, "%s.comparison.json" % stem), payload)

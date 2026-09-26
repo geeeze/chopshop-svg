@@ -258,7 +258,8 @@ chopshop-svg/
 ├── scripts/
 │   ├── prep_raster.py         # front: check/normalise a raster (--fix to modify)
 │   ├── trace_sweep.py         # front: multi-pass VTracer candidate sweep
-│   ├── compare_candidates.py  # front: run every candidate through A + B
+│   ├── compare_candidates.py  # front: run every candidate through A + B,
+│   │                          #      then rank on whether the artwork survived
 │   ├── pick_finish.py         # front: --loop menu driver
 │   ├── snap_colors.py         # snap a trace's colours to a palette
 │   ├── palette_variants.py    # aux: re-colour a finished trace onto named palettes
