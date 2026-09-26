@@ -61,6 +61,26 @@ def slug(name: str) -> str:
     return value or "artwork"
 
 
+def health_payload() -> dict:
+    """The body of GET /health.
+
+    `host` is a LABEL, read from the environment, not a literal in this file.
+    That matters because this repo is public: a hardcoded machine name in a
+    tracked file is published to anyone who reads it, and the studio only
+    needs something to show in its runner dropdown. Set
+    CHOPSHOP_RUNNER_LABEL to override; otherwise report this machine's name.
+    """
+    return {
+        "ok": True,
+        "host": os.environ.get("CHOPSHOP_RUNNER_LABEL") or socket.gethostname(),
+        "mode": "real",
+        "tools": {
+            "inkscape": shutil.which("inkscape") is not None,
+            "gs": shutil.which("gs") is not None,
+        },
+    }
+
+
 def container_input_path(input_path: str, *, host_upload_root: Path = HOST_UPLOAD_ROOT,
                          container_upload_root: Path = CONTAINER_UPLOAD_ROOT) -> str:
     source = Path(input_path).resolve()
@@ -320,17 +340,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         parts = [part for part in self.path.split("/") if part]
         if self.path == "/health":
-            # Report the hostname from the environment at runtime rather than a
-            # hardcoded value: a literal here is published with the repo, and
-            # the studio only needs a label to tell runners apart in its
-            # dropdown. Override with CHOPSHOP_RUNNER_LABEL.
-            self.json_response(200, {"ok": True,
-                                     "host": os.environ.get(
-                                         "CHOPSHOP_RUNNER_LABEL",
-                                         socket.gethostname()),
-                                     "mode": "real",
-                                     "tools": {"inkscape": shutil.which("inkscape") is not None,
-                                               "gs": shutil.which("gs") is not None}})
+            self.json_response(200, health_payload())
             return
         if len(parts) >= 3 and parts[0] == "files":
             job = JOBS.get(parts[1])
