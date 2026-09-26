@@ -1,7 +1,2 @@
-NOTE: document is 270.93mm wide but declares no viewBox, so all lengths are read as CSS px (1px = 0.2646mm)
-VALIDATION FAILED for 02_traced/00-example/candidate_04.svg:
- - [COLOR_COUNT]: Color count 2457 exceeds max 6 (used: #070000, #0a0000, #0b0000, #0e0000, #0f0000, #0f0f09, #100000, #100202, #110606, #111105, #130000, #130606, #130702, #140000, #150000, #151406, #160000, #160303, #160f12, #161600, #170000, #170f02, #180000, #180600, #180c04, #181107, #190000, #191309, #1a0000, #1a0500, #1a0903, #1a0d0d, #1b0000, #1b0d03, #1c0000, #1c0303, #1c0b03, #1c0d0a, #1c0e0a, #1c1607, #1d0000, #1d0805, #1e0100, #1e0a05, #1e1 ...)
- - [NODE_COUNT]: Path #1 (no id) has 2364 nodes, above the limit of 500 (heavily traced paths slow the RIP and cannot be hand-edited)
- - [NODE_COUNT]: Path #2 (no id) has 1513 nodes, above the limit of 500 (heavily traced paths slow the RIP and cannot be hand-edited)
- - [NODE_COUNT]: Path #3 (no id) has 758 nodes, above the limit of 500 (heavily traced paths slow the RIP and cannot be hand-edited)
- - [PALETTE]: 2457 declared colours not in the spec palette: #070000, #0a0000, #0b0000, #0e0000, #0f0000, #0f0f09, #100000, #100202, #110606, #111105 (palette: #000000, #ffffff, #ff0000, #0000ff, #ffff00, #00ff00)
+NOTE: document is 317.50mm wide but declares no viewBox, so all lengths are read as CSS px (1px = 0.2646mm)
+VALIDATION PASSED for 02_traced/00-example/candidate_04.svg
