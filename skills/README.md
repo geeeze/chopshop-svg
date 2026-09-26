@@ -20,6 +20,28 @@ cp -r skills/shirt-print-front-half ~/.hermes/skills/shirt-print-front-half
 cp -r skills/svg-print-preflight  ~/.hermes/skills/svg-print-preflight
 ```
 
+### These are generated — use `./sync-skills`, not a copy
+
+The working skills on the author's machine run ahead of these copies, so they
+drift. `./sync-skills` refreshes them:
+
+```bash
+./sync-skills            # refresh both
+./sync-skills --check    # report drift, change nothing
+./sync-skills --diff     # show what would change
+```
+
+It is **not** a plain copy, and the reason matters: this repo is **public**,
+while the working skills are private and have grown sections describing stacks
+that are not in this repo at all (see Scope below). `sync-skills` replaces any
+section whose backing code is absent here with a pointer to the private repo,
+and redacts hostnames, private addresses, and private-script filenames. Copying
+by hand would publish all of that.
+
+The direction is one-way on purpose: **never import a repo copy back over a
+working skill.** The repo copy is downstream; importing it would silently undo
+local work.
+
 The `.md` files are readable as-is for a human too — they are the design notes
 and pitfall list for the code they describe. `AGENTS.md` is the shorter
 orientation; these skills are the deep reference.

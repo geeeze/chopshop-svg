@@ -300,6 +300,25 @@ than no figure.
   carries `(width, source)` in one place and a bare string in another fails
   later inside string formatting (`not all arguments converted`) with a message
   that points nowhere near the walker. One shape per slot, consistently.
+- **A documented spec key may be read by nothing — grep for readers before
+  relying on it.** A key can sit in every spec file and be described in the docs
+  as the budget that governs a behaviour while no code path reads it; two
+  similarly-named knobs (a human menu cap, an automated retry budget) are easy to
+  conflate from the names alone. Find the consumer before wiring a control to it.
+- **A normaliser is not a validator.** A helper that maps what it recognises and
+  returns everything else *unchanged* will happily "accept" a typo — verified:
+  `normalize_color('not-a-colour')` returns `'not-a-colour'`, so a bad value
+  reaches the artifact as `fill="not-a-colour"` and crashes later in the pipeline
+  instead of failing at the gate. Gate every externally-supplied value (a palette
+  entry, a user-supplied colour map) with a strict pattern check of its own
+  (`^#[0-9a-f]{6}$` and the like); the normaliser is for *reading* values you
+  already trust.
+- **Name the lever, or say there isn't one.** A rejection is only actionable if
+  the operator can see what to change. Where a limit has a known remedy, say so;
+  where nothing downstream can fix it, say *that* — a node-count limit has no
+  post-process reducer, so the only fix is a coarser upstream re-trace, and a
+  finding that implies a fixable knob which does not exist sends the reader
+  hunting for it.
 - **Wrap rule crashes for production, unwrap them for debugging.** When checks
   are wrapped so a crash becomes a `[RULE] check crashed: ...` line, the
   traceback is gone — for diagnosis, import the module and call the check

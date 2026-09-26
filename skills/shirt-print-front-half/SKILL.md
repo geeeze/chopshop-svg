@@ -137,6 +137,195 @@ lower `color_precision` for a flatter trace without editing code:
  {"colormode": "color", "mode": "spline", "color_precision": 2}}}
 ```
 
+## Tracer parameter levers: measured, orthogonal, and mostly inert
+
+`scripts/tune_sweep.py` is a batch experiment bench (NOT the candidate
+generator `trace_sweep.py` is). It sweeps trace settings against one raster,
+measures every cell on the same axes, and writes `08_tune/<stem>/tune.md` +
+`tune.json` + an optional `contact-sheet.png`. It ranks by MAE_art as a
+MEASUREMENT ORDER and never recommends a cell.
+
+```bash
+.venv/bin/python scripts/tune_sweep.py 01_prepped/art.prepped.png \
+    --spec spec.json --preset baseline,nodewise,coarse,flat4 \
+    --fidelity --contact-sheet --with-node-reduce
+```
+
+Presets: `baseline` `flat` `flat4` `coarse` `nodewise` `nodewise_coarse`
+`binary` `polygon`. Flags: `--filter-speckle --hierarchical --splice --length
+--color-precision --layer-difference` (comma lists), `--max-cells`,
+`--no-fidelity`, `--with-node-reduce`, `--contact-sheet`.
+
+Measured on this repo's `01_prepped/00-example.prepped.png` (1024x1024, 245 608
+source colours) — the two node levers are ORTHOGONAL and neither alone works:
+
+- `layer_difference` moves path/colour COUNT (4->64: paths 18 053->2 863) and
+  leaves max nodes at 1 528 throughout.
+- `splice_threshold` moves the WORST SINGLE PATH (45->150: 798->588, monotone,
+  colours unchanged) and leaves path count alone.
+- `filter_speckle` moves path count, not max nodes.
+
+**`layer_difference` is NOT monotone on max nodes**: ld32 gives 601, ld64 gives
+763 — coarser, worse. Same non-monotonicity as Inkscape's simplify threshold.
+Any one-axis-at-a-time sweep misleads; the node route needs a 2-D sweep.
+
+Confirmed INERT (do not offer these as knobs):
+- `max_iterations` — identical output at 10/20/50.
+- `path_precision` — identical output at 1/2/3/4 (vtracer 0.6.15 ignores it).
+- `corner_threshold` — default 60 is already the floor; 100 and 150 make max
+  nodes WORSE (1 528 -> 1 624 -> 1 633).
+
+`color_precision` 2 is a CLIFF: 1 path, 1 fill, whole image collapses. 3 is the
+usable floor (3 127 paths, max 353), not 2.
+
+**Quantising the SOURCE raster does not reduce node count.** Traced over
+pngquant / PIL median / max-coverage / octree sources at 6-48 colours: max
+nodes went 967 -> 912 (median 16) or -> 1 415 (median 6). It is a colour tool,
+not a node tool. `print.prep_colors` will not help `geometry_overload`.
+
+## Node reduction: `scripts/node_reduce.py`
+
+The §5 solution, implemented. Clears the gate on every candidate measured
+(965->467, 972->391, 1 054->499), touching 1-4 paths of 1 646-4 981, in ~3.7 s.
+`--verify` on candidate_11: 0.0024% pixels changed, largest background blob
+2 px.
+
+```bash
+.venv/bin/python scripts/node_reduce.py art.svg --out reduced.svg --verify
+```
+
+Targeted by default (`--all-paths` for the measured-worse whole-file mode).
+Per-path tolerance escalation, doubling from `--tolerance` (0.5) to
+`--tolerance-cap` (8.0). **Regression rejection** is TRANSACTIONAL: fits are
+staged and only applied once every path passes, and the run is rejected if ANY
+path grew — not merely `path_nodes_max` (a damaged small path used to be
+committed as long as the worst path improved). A fit whose path data does not
+re-parse is refused, since its node count then comes from a command-letter
+regex that can under-count and read as a reduction.
+
+The prototype's deviation-metric bug is fixed. Deviation is now a TWO-SIDED
+nearest-point distance after Schneider re-parameterisation:
+original->fit AND fit->original. Two traps found while fixing it, both of
+which report a clean fit as dirty or vice versa:
+
+- **Nearest-SAMPLE, not nearest-point-to-polyline.** Measuring the fitted curve
+  against the nearest original *sample* reports half a sample spacing of
+  discretisation error — 1.27 units on a perfectly straight 100-unit line.
+  Distance must be to the POLYLINE through the original points.
+- **t snapped to the sample grid, not refined.** Snapping t to the nearest of
+  `count` curve samples leaves up to half a spacing (0.41 units at
+  CURVE_DENSITY=3). Reuse the ternary-search refinement; it takes 0.41 -> 0.003.
+- numpy: `np.abs(complex)**2` collapses to a REAL array, so there is no axis 2
+  to reduce over. Do point-to-segment distance in explicit (x, y).
+
+`_invert` note for the twin below: an LA image has 2 bands, RGBA 4. Converting
+to RGB before `Image.merge` yields 4 bands and fails to merge back into LA.
+
+## Colour-inverted source twin (`prep_raster.py`)
+
+`--invert` / `spec.print.invert` writes `<stem>.prepped.inverse.png` beside the
+normal prepped file, in BOTH check and fix mode, recorded as a top-level
+`inverse` key in the `.prep.json` sidecar. The key is ALWAYS present (with
+`ran: false` + a reason) so a consumer can tell "not produced" from "not
+requested".
+
+- `photometric` (default): every channel `c -> 255-c`. Exact — verified
+  `max |a+b-255| == 0`. It inverts EVERY band, so it FLATTENS a transparent
+  background to opaque; do not describe it as alpha-preserving.
+- `negative`: inverts chroma, PRESERVES alpha. This is the one a transparent
+  matte needs. Handle RGBA, LA and tRNS palette images by band count.
+
+The twin is purely ADDITIVE: check mode must leave the prepped file
+byte-identical (test-pinned), because that is the file VTracer consumes.
+Already-vector input records `ran: false` + "nothing to invert" rather than
+silently omitting the key. `runner.py::_publish_source_previews` copies both to
+the stable names `source.png` / `source.inverse.png`; `artifact_path` also
+resolves them from `01_prepped` so older jobs still serve them. The studio job
+page shows both chips and each `img` self-hides on 404, so a missing twin
+degrades to the single source chip.
+
+Why it is not a cosmetic swap: speckle filtering keys on local contrast, so a
+design that reads clean on white can pick up a halo of spurious regions on
+black. Producing both at prep lets a sweep compare the two readings.
+
+`spec["print"]` may be absent, null, or a non-dict in a hand-written spec.
+`spec.setdefault("print", {})` returns the existing `None` rather than
+replacing it, so the next item assignment raised `TypeError` and killed prep
+with a traceback (rc=1) instead of its documented rc=2. Use
+`if not isinstance(spec.get("print"), dict): spec["print"] = {}`. A bad spec is
+data — normalise and carry on.
+
+Two more invert traps, both silent:
+
+- **`--invert` must not clobber the spec's mode.** `--invert-mode` defaulting to
+  `"photometric"` meant a bare `--invert` overwrote a spec's
+  `{"mode": "negative"}` — flattening exactly the transparent matte the user
+  chose `negative` to protect. Default the flag to `None` and only write the
+  mode when it was explicitly given.
+- **Palette images carry transparency in a tRNS index, not an alpha band.** A
+  `P`-mode PNG with `transparency` fell through to `convert("RGB")`, destroying
+  the matte while the sidecar still reported `negative`. Promote `P`/`PA` to
+  `RGBA` first. And `_write_inverse` must UNLINK a twin left by an earlier run
+  when `invert` is now off — `trace_sweep.py`/`run_record.py` glob the prep dir,
+  so a stale file reads as current.
+
+### Four ways a simplifier silently deletes artwork (all found by review)
+
+Each of these produced a SUCCESS message while damaging the file. Node-count
+checks cannot catch any of them; only geometry checks can.
+
+1. **Unsupported segment types serialise to `""`.** svgpathtools'
+   `QuadraticBezier` and `Arc` have NO `.d()` method. A fallback of
+   `seg.d() if hasattr(seg, "d") else ""` therefore yields `""`, the trailing
+   `if p` filter drops it, and a path of unsupported segments becomes the empty
+   string — reported as `reduced, nodes 30 -> 0`. **A deleted path clears any
+   node gate.** Emit `Q` for quadratics (exact) and RAISE
+   `UnsupportedSegmentError` for anything else; `reduce_svg` then records
+   `unsupported_segment` and leaves the path alone.
+
+2. **Multi-subpath `d` gets welded.** One `d` can hold several `M`-separated
+   subpaths; svgpathtools returns them as one continuous segment list with a
+   discontinuity. Fitting across a discontinuity joins two disjoint shapes —
+   and because the welded result is SHORTER it passes the "nodes strictly
+   decreased" test and gets accepted. Split on discontinuity
+   (`split_subpaths`), fit each separately, re-emit an `M` per subpath.
+
+3. **`t` snapped to the sample grid.** See the deviation notes above.
+
+4. **Refuse an empty fit explicitly.** Guard `if not new_d.strip()` in the
+   escalation loop; a fit that empties a path is a deletion, not a reduction.
+
+Also: the line-collapse branch must advance by the RUN length (`i = j`), never
+by a count derived from the sample list — a sample-derived increment
+re-visits segments and desynchronises the walk.
+
+When nothing could be reduced, still WRITE the output (status `no_change`) so
+a caller never has to special-case a missing file.
+
+### Detect closure GEOMETRICALLY, per subpath — never by segment type
+
+`svgpathtools` parses `Z` into an ordinary trailing segment running back to the
+subpath's start, and `Path.closed` is wrong as soon as there is more than one
+subpath (first subpath closed + second open reports `closed=False`). Worse, the
+trailing segment's TYPE is not a reliable signal: the fitter closes a subpath
+with a CUBIC, so `isinstance(tail, Line)` silently drops the `Z` from exactly
+the paths the tool rewrote. Both variants were live here; the second only
+surfaced when I compared raw `Z` counts on real output, because a geometric
+total had looked fine (a dropped `Z` can be masked by a gain elsewhere).
+
+Test closure as: the subpath's last segment ends where the subpath started AND
+is non-degenerate. No fallback to `path.closed` — on a genuinely open path that
+invents a `Z` and adds a node. Verify by counting `Z` CHARACTERS before and
+after, not just comparing closed-subpath totals.
+
+### A "perfect" fidelity report is the most suspicious result there is
+
+`--verify` rendered "before" from the same path it had just overwritten, so
+in-place mode reported 0.000% changed — from the exact check meant to catch
+geometry damage. When a measurement comes back perfect, suspect the
+measurement: confirm the two inputs are genuinely different files. Always keep a
+pre-reduction copy when verifying in place.
+
 ## Colour reduction to <20 colours
 
 The `poster` preset produces hundreds of colours on complex images (VTracer's
@@ -186,12 +375,25 @@ Two concurrency pitfalls, both fixed in `front_common`/`compare_candidates`:
 
 Locked in by `test_parallel_matches_sequential` in both test files.
 
+## Optional generation stacks (not in this repo)
+
+This copy is generated from a private working skill and has had its
+generation-stack sections removed. The local skill also documents a
+text-to-image / img2img bridge used to *generate* a source raster
+before tracing, including a specific GPU stack and local install
+paths. None of that is part of this pipeline, and none of the scripts
+it describes exist here.
+
+If you need it, see the private `chopshop-sui` repo. Nothing in
+`front_pipeline.sh` or `pipeline.sh` calls it: generation is opt-in and
+happens upstream of the pipeline, never inside it.
+
 ## Palette variations (auxiliary layer)
 
 `scripts/palette_variants.py` re-colours a FINISHED trace onto the palettes in
 `scripts/palettes.json` while leaving the CAD structure byte-identical (only
 `fill`/`stroke`/`stop-color` change; every `d=`, `viewBox`, `width`/`height` is
-untouched). It is an aux layer -- it calls the pipeline,
+untouched). It is an aux layer like `<private-script>` -- it calls the pipeline,
 nothing calls it. Output: `07_palettes/<stem>/<palette-id>/` + `report.json|md`.
 
 ```bash

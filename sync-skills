@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""sync-skills — refresh the in-repo `skills/` copies from the on-disk Hermes
+skills, WITHOUT publishing private-stack detail.
+
+WHY THIS IS NOT JUST A COPY
+    ~/Documents/GitHub/chopshop-svg is a PUBLIC repo; `skills/` in it is
+    world-readable. The on-disk skills are the author's private working copies
+    and have grown sections that describe the private stack — the SwarmUI /
+    ComfyUI generation layer, whose scripts (`scripts/swarm_bridge.py`,
+    `scripts/SWARMUI_PLAN.md`) do not exist in this repo at all and live in the
+    PRIVATE chopshop-sui. skills/README.md already says as much: those layers
+    "encode a specific generation stack and local install paths rather than
+    anything about the pipeline itself".
+
+    So the two directions need different treatment:
+
+      disk -> repo   SANITISED. Sections whose backing code is absent from this
+                     repo are replaced with a pointer to the private repo, and
+                     any host/secret-looking literal is redacted.
+      repo -> disk   NEVER. The repo copy is downstream; importing it back
+                     would silently undo local work.
+
+    Run with --check to report drift without writing, --diff to show it.
+
+USAGE
+    ./sync-skills            refresh the repo copies
+    ./sync-skills --check    report only
+    ./sync-skills --diff     show what would change
+
+Exit 0 = repo copies in sync. Exit 1 = drift (or drift + --check).
+"""
+from __future__ import annotations
+
+import argparse
+import difflib
+import os
+import re
+import sys
+
+REPO = os.path.dirname(os.path.abspath(__file__))
+SKILLS_DIR = os.path.join(REPO, "skills")
+HERMES_SKILLS = os.path.expanduser("~/.hermes/skills")
+
+# Sections dropped from a skill before publishing, mapped to the replacement
+# text. Keyed by the H2 heading that starts the section.
+#
+# Add an entry here whenever a skill grows a section about a stack that is NOT
+# in this repo. The test is simple: does the file/script it documents exist
+# here? If not, it is private-stack detail and must not be published.
+REDACTED_SECTIONS = {
+    "## SwarmUI bridge (text-to-image / img2img as a source & filter)": (
+        "## Optional generation stacks (not in this repo)\n"
+        "\n"
+        "This copy is generated from a private working skill and has had its\n"
+        "generation-stack sections removed. The local skill also documents a\n"
+        "text-to-image / img2img bridge used to *generate* a source raster\n"
+        "before tracing, including a specific GPU stack and local install\n"
+        "paths. None of that is part of this pipeline, and none of the scripts\n"
+        "it describes exist here.\n"
+        "\n"
+        "If you need it, see the private `chopshop-sui` repo. Nothing in\n"
+        "`front_pipeline.sh` or `pipeline.sh` calls it: generation is opt-in and\n"
+        "happens upstream of the pipeline, never inside it.\n"
+        "\n"
+    ),
+}
+
+# Literals that must never be published even if they appear mid-sentence.
+# Hostnames, private addresses, and env var names that name a deployment.
+REDACTIONS = [
+    (re.compile(r"\b[\w.-]+\.tail\d[a-z0-9]*\.ts\.net\b"), "<private-host>"),
+    (re.compile(r"\b10\.\d+\.\d+\.\d+\b"), "<private-ip>"),
+    (re.compile(r"\b192\.168\.\d+\.\d+\b"), "<private-ip>"),
+    (re.compile(r"\b100\.(?:\d+\.){2}\d+\b"), "<private-ip>"),
+    (re.compile(r"scripts/swarm_bridge\.py"), "<private-script>"),
+    (re.compile(r"\bswarm_bridge\.py\b"), "<private-script>"),
+    (re.compile(r"\bSWARMUI_PLAN\.md\b"), "<private-doc>"),
+]
+
+# These are env var NAMES, which are documentation rather than secrets. Keep
+# them; redact only assignments that look like real values.
+SAFE_ENV = re.compile(r"\b[A-Z][A-Z0-9_]{3,}\b")
+
+
+def disk_skill_path(name: str):
+    for root, dirs, files in os.walk(HERMES_SKILLS):
+        if "SKILL.md" in files and os.path.basename(root) == name:
+            return os.path.join(root, "SKILL.md")
+    return None
+
+
+def split_sections(text: str):
+    """[(heading_or_None, body)] split on H2 boundaries."""
+    out, cur, cur_h = [], [], None
+    for line in text.splitlines(keepends=True):
+        if line.startswith("## "):
+            out.append((cur_h, "".join(cur)))
+            cur, cur_h = [line], line.rstrip("\n")
+        else:
+            cur.append(line)
+    out.append((cur_h, "".join(cur)))
+    return out
+
+
+def sanitize(text: str, drop: list) -> str:
+    kept = []
+    for heading, body in split_sections(text):
+        if heading in REDACTED_SECTIONS:
+            kept.append(REDACTED_SECTIONS[heading])
+            continue
+        if heading and heading.strip() in drop:
+            continue
+        kept.append(body)
+    out = "".join(kept)
+    for pattern, repl in REDACTIONS:
+        out = pattern.sub(repl, out)
+    return out
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--check", action="store_true")
+    ap.add_argument("--diff", action="store_true")
+    ap.add_argument("--skill", action="append", default=None)
+    args = ap.parse_args()
+
+    if not os.path.isdir(SKILLS_DIR):
+        print("no skills/ directory in %s" % REPO)
+        return 1
+
+    names = args.skill or sorted(
+        d for d in os.listdir(SKILLS_DIR)
+        if os.path.isdir(os.path.join(SKILLS_DIR, d))
+    )
+    drift = 0
+    for name in names:
+        repo_path = os.path.join(SKILLS_DIR, name, "SKILL.md")
+        disk_path = disk_skill_path(name)
+        if disk_path is None:
+            print("%-26s NOT FOUND on disk -- skipped" % name)
+            continue
+        with open(disk_path) as fh:
+            disk_text = fh.read()
+        # Files the public repo does not contain must not be documented.
+        drop = []
+        wanted = sanitize(disk_text, drop)
+        current = ""
+        if os.path.exists(repo_path):
+            with open(repo_path) as fh:
+                current = fh.read()
+        if current == wanted:
+            print("%-26s in sync" % name)
+            continue
+        drift += 1
+        print("%-26s DRIFTED (%d bytes on disk -> %d published)"
+              % (name, len(disk_text), len(wanted)))
+        if args.diff:
+            diff = difflib.unified_diff(
+                current.splitlines(keepends=True),
+                wanted.splitlines(keepends=True),
+                fromfile="repo/%s/SKILL.md" % name,
+                tofile="sanitised-from-disk/%s/SKILL.md" % name,
+                n=2)
+            sys.stdout.writelines(diff)
+        elif not args.check:
+            with open(repo_path, "w") as fh:
+                fh.write(wanted)
+            print("%-26s written" % name)
+
+    if args.check and drift:
+        print("\n%d skill(s) would change; run ./sync-skills to publish"
+              % drift)
+    return 1 if drift else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -11,6 +11,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import threading
 import traceback
@@ -319,7 +320,15 @@ class Handler(BaseHTTPRequestHandler):
             return
         parts = [part for part in self.path.split("/") if part]
         if self.path == "/health":
-            self.json_response(200, {"ok": True, "host": "geenet-docker", "mode": "real",
+            # Report the hostname from the environment at runtime rather than a
+            # hardcoded value: a literal here is published with the repo, and
+            # the studio only needs a label to tell runners apart in its
+            # dropdown. Override with CHOPSHOP_RUNNER_LABEL.
+            self.json_response(200, {"ok": True,
+                                     "host": os.environ.get(
+                                         "CHOPSHOP_RUNNER_LABEL",
+                                         socket.gethostname()),
+                                     "mode": "real",
                                      "tools": {"inkscape": shutil.which("inkscape") is not None,
                                                "gs": shutil.which("gs") is not None}})
             return

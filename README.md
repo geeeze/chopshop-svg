@@ -46,6 +46,44 @@ the back half on each in turn:
 ./front_pipeline.sh artwork.png --loop
 ```
 
+### Two side tools
+
+Neither is part of the workflow above; both are run by hand.
+
+**`scripts/tune_sweep.py`** — a batch bench for finding a good trace
+configuration. It re-traces ONE raster under many parameter sets, measures
+every cell on the same axes, and writes a report you compare yourself:
+
+```bash
+.venv/bin/python scripts/tune_sweep.py 01_prepped/art.prepped.png \
+    --spec spec.json --preset baseline,nodewise,coarse,flat4 \
+    --fidelity --contact-sheet --with-node-reduce
+# → 08_tune/art/tune.md, tune.json, contact-sheet.png
+```
+
+It ranks by pixel fidelity as a **measurement order and never recommends a
+cell** — the same law the pipeline follows. Two findings worth knowing before
+you sweep: `layer_difference` (colour count) and `splice_threshold` (worst
+single path's nodes) are **orthogonal**, so one-axis sweeps mislead; and
+`layer_difference` is **not monotone** on node count, so coarser can be worse.
+
+**`scripts/node_reduce.py`** — the remedy for `geometry_overload`, a trace that
+passes every colour and ink rule but has one path with too many nodes for the
+cutter. It targets only the over-gate paths, because simplifying a whole file
+measurably makes the worst path worse:
+
+```bash
+.venv/bin/python scripts/node_reduce.py 02_traced/art/candidate_11.svg \
+    --out reduced.svg --max-nodes 500 --verify
+```
+
+Clearing the node budget is **not** the same as the artwork surviving.
+`--verify` renders before and after and reports ink drift and the largest
+background-coloured blob, which is the shared-boundary gap signature. Measured
+on real candidates: one clears at 965 → 391 with a 2px gap, another at
+2240 → 461 but with a 16px gap — gate cleared, art eroded. Read
+`scripts/NODE_REDUCTION.md` before trusting it.
+
 ### What the comparison report tells you
 
 `04_validated/artwork.comparison.md` is the report. For every candidate it lists:
@@ -170,6 +208,7 @@ The render-preflight tolerances and the front-half prep/trace defaults.
 | `prep_colors` | int \| null | `16` | *Front half* — pngquant colour budget in prep; `null` disables quantisation. |
 | `background_hex` | string | `"#ffffff"` | *Front half* — colour to flatten alpha onto before tracing. |
 | `sweep_max_candidates` | int | `12` | *Front half* — cap on the number of traced candidates. |
+| `invert` | bool \| object | `true` | *Front half* — also write a colour-inverted **twin** of the prepped raster (`<stem>.prepped.inverse.png`), in both check and fix mode. `{"mode": "negative"}` inverts chroma and **preserves alpha** (use it for a transparent matte); the default `photometric` inverts every band and therefore flattens a transparent background to opaque. The twin is a derived artefact and may be absent; its presence is always recorded in the `.prep.json` sidecar under `inverse`. A stale twin from an earlier run is deleted when this is turned off, since the prep dir is globbed. |
 
 ### Notes
 

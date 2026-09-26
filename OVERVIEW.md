@@ -368,9 +368,21 @@ SPEC=other.json ./pipeline.sh x.svg            # different spec
 .venv/bin/python scripts/snap_colors.py 00_source/art.svg spec.json --dry-run
 .venv/bin/python scripts/snap_colors.py 00_source/art.svg spec.json -o 03_cleaned/art.svg
 
+# node reduction — the geometry_overload remedy (§5 of scripts/NODE_REDUCTION.md).
+# Target the over-gate paths only; rewriting the whole file makes things worse.
+.venv/bin/python scripts/node_reduce.py 02_traced/00-example/candidate_11.svg \
+    --out reduced.svg --max-nodes 500 --verify
+
+# batch experiment bench: sweep trace settings against one raster, measure every
+# cell on the same axes, pick nothing. `--with-node-reduce` also reports each
+# cell's post-reduction figures and a `structure` column (Z/M counts vs input).
+.venv/bin/python scripts/tune_sweep.py 01_prepped/00-example.prepped.png \
+    --spec spec.json --preset baseline,nodewise,coarse,flat4 \
+    --fidelity --contact-sheet --with-node-reduce
+
 # the batch
 .venv/bin/python scripts/run_batch.py          # → 04_validated/batch_results.json
-.venv/bin/python -m pytest tests/ -q           # 246 tests
+.venv/bin/python -m pytest tests/ -q           # 342 tests
 
 # open the artwork by hand
 inkscape 00_source/art.svg
