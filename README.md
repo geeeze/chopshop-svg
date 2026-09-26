@@ -38,6 +38,25 @@ command -v inkscape gs qpdf
 ./pipeline.sh 02_traced/artwork/candidate_04.svg
 ```
 
+Try it on the shipped example, which is known to pass both layers:
+
+```bash
+./front_pipeline.sh 00_source/00-example.png
+./pipeline.sh 02_traced/00-example/candidate_10.svg   # -> PIPELINE PASSED
+```
+
+`00_source/00-example.png` is generated, not hand-drawn — rebuild it with
+`.venv/bin/python scripts/make_example_source.py`. It is deliberately flat and
+inside `spec.json`'s 6-colour palette, because **tonal art cannot pass a
+6-colour gate**: the previous example was an engraved floral with 245 608
+distinct colours (256 of them cover only 34% of the pixels), and the only
+candidates that cleared it did so by discarding the artwork down to one black
+silhouette. It now traces to 5 colours at `mae_art` 0.005 with zero hard gates
+and zero advisories. The old image is kept as
+`00_source/00-example-tonal-reference.png` — it is a useful negative example,
+and the numbers quoted throughout `scripts/NODE_REDUCTION.md` were measured on
+it.
+
 That's the whole workflow. The `--loop` flag turns step 3–4 semi-interactive:
 after the comparison it prints a menu, you pick up to 3 candidates, and it runs
 the back half on each in turn:

@@ -31,7 +31,9 @@ DESIGN: TARGET, DO NOT SIMPLIFY THE WHOLE FILE
     targeted simplification reached the *same* max node count as whole-file
     simplification while touching one path instead of 204, losing 5.6x less ink.
 
-    Measured (this repo, `02_traced/00-example/`, 1024x1024 source):
+    Measured on the tonal reference image (`00_source/00-example-tonal-
+    reference.png`, kept for exactly this purpose -- a 6-colour gate cannot be
+    satisfied by tonal art, so node weight shows up hardest there):
         whole file, tol 0.5 : 204 paths touched, ink lost 6.615%
         targeted,  tol 0.5 :   1 path touched, ink lost 1.192%
 

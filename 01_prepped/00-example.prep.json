@@ -19,42 +19,55 @@
     },
     {
       "check": "geometry",
-      "detail": "source is 1024x1024px (aspect 1.000), 86.7x86.7mm at 300 dpi; no size prescribed in the spec, so nothing is enforced",
+      "detail": "source is 1200x1200px (aspect 1.000), 101.6x101.6mm at 300 dpi; no size prescribed in the spec, so nothing is enforced",
       "status": "info"
     },
     {
       "check": "color_count",
-      "detail": "~21915 unique colours (photo-like); many colours trace to many paths/inks",
+      "detail": "~315 unique colours; many colours trace to many paths/inks",
       "status": "info"
     },
     {
       "check": "background",
-      "detail": "border varies (std 42.5) -- full-bleed or photographic; background removal may be needed before tracing",
-      "status": "warn"
+      "detail": "border looks uniform (std 0.0, mean #ffffff) -- likely a solid background",
+      "status": "pass"
     }
   ],
-  "generated": "2026-09-24T04:04:19+00:00",
+  "generated": "2026-09-26T08:03:41+00:00",
   "input": {
     "ext": ".png",
     "file": "00_source/00-example.png",
     "mode": "RGB",
-    "sha256": "f71ae6afa811500082c55499ed3dc03dbc6dc0f36e271ae8c83a9daf214cfed0",
-    "size_bytes": 2297410,
+    "sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002",
+    "size_bytes": 9617,
     "size_px": [
-      1024,
-      1024
+      1200,
+      1200
+    ]
+  },
+  "inverse": {
+    "derived_from": "00-example.prepped.png",
+    "file": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.inverse.png",
+    "mode": "photometric",
+    "note": "colour-inverted twin; the original prepped file is unchanged and remains the traced input unless a caller asks otherwise",
+    "ran": true,
+    "sha256": "d24cc06df1f8838dbd0376fce870a67031f1a8b7e791e17885b42062831a52fc",
+    "size_bytes": 8254,
+    "size_px": [
+      1200,
+      1200
     ]
   },
   "mode": "check",
   "notes": [],
   "output": {
     "container": "png",
-    "file": "01_prepped/00-example.prepped.png",
-    "sha256": "f71ae6afa811500082c55499ed3dc03dbc6dc0f36e271ae8c83a9daf214cfed0",
-    "size_bytes": 2297410,
+    "file": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
+    "sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002",
+    "size_bytes": 9617,
     "size_px": [
-      1024,
-      1024
+      1200,
+      1200
     ],
     "unchanged": true
   },

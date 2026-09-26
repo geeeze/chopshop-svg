@@ -23,7 +23,7 @@
       "filter_speckle": 2,
       "hierarchical": "cutout",
       "index": 1,
-      "output_sha256": "9997291244e2d6e4ad03613853a4a6dbed6505b5f4664108b51dd7dbd1528d95",
+      "output_sha256": "cfe2a30a8161188e8aee0d9ce7b73cb252becfe2254367d106d896a5a3064a9d",
       "palette_quantized_sha256": null,
       "params": {
         "colormode": "binary",
@@ -31,51 +31,57 @@
         "hierarchical": "cutout"
       },
       "preset": "bw",
-      "source_sha256": "f71ae6afa811500082c55499ed3dc03dbc6dc0f36e271ae8c83a9daf214cfed0",
-      "use_palette": false
+      "source_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002",
+      "use_palette": false,
+      "variant": "source",
+      "variant_input": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
+      "variant_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002"
     },
     {
       "file": "candidate_02.svg",
-      "filter_speckle": 2,
+      "filter_speckle": 8,
       "hierarchical": "cutout",
       "index": 2,
-      "output_sha256": "b830d19e5005b74edbd67b6797cde39481cf16a36ed6fda6b8747c35013deb32",
-      "palette_quantized_sha256": "2d57c8b0244c4e13011115252871ed2747b750d82fca443ae67be0b2e2950c6c",
+      "output_sha256": "cfe2a30a8161188e8aee0d9ce7b73cb252becfe2254367d106d896a5a3064a9d",
+      "palette_quantized_sha256": null,
       "params": {
         "colormode": "binary",
-        "filter_speckle": 2,
+        "filter_speckle": 8,
         "hierarchical": "cutout"
       },
       "preset": "bw",
-      "source_sha256": "f71ae6afa811500082c55499ed3dc03dbc6dc0f36e271ae8c83a9daf214cfed0",
-      "use_palette": true
+      "source_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002",
+      "use_palette": false,
+      "variant": "source",
+      "variant_input": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
+      "variant_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002"
     },
     {
       "file": "candidate_03.svg",
-      "filter_speckle": 2,
+      "filter_speckle": 16,
       "hierarchical": "cutout",
       "index": 3,
-      "output_sha256": "09c0c95c56c71a3347609467b3eff3d6937736453c4ec6947762be11e0a3099f",
+      "output_sha256": "cfe2a30a8161188e8aee0d9ce7b73cb252becfe2254367d106d896a5a3064a9d",
       "palette_quantized_sha256": null,
       "params": {
-        "color_precision": 6,
-        "colormode": "color",
-        "filter_speckle": 2,
-        "hierarchical": "cutout",
-        "layer_difference": 16,
-        "mode": "spline"
+        "colormode": "binary",
+        "filter_speckle": 16,
+        "hierarchical": "cutout"
       },
-      "preset": "poster",
-      "source_sha256": "f71ae6afa811500082c55499ed3dc03dbc6dc0f36e271ae8c83a9daf214cfed0",
-      "use_palette": false
+      "preset": "bw",
+      "source_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002",
+      "use_palette": false,
+      "variant": "source",
+      "variant_input": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
+      "variant_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002"
     },
     {
       "file": "candidate_04.svg",
       "filter_speckle": 2,
       "hierarchical": "cutout",
       "index": 4,
-      "output_sha256": "8a5e814b6094bb26d7d00014faa6d7acd405770b26414c3e97f98cb5397539a0",
-      "palette_quantized_sha256": "2d57c8b0244c4e13011115252871ed2747b750d82fca443ae67be0b2e2950c6c",
+      "output_sha256": "c28cd3c8935c60c41da52ac297644f5ba8658480d601fb6600717dc875a50595",
+      "palette_quantized_sha256": null,
       "params": {
         "color_precision": 6,
         "colormode": "color",
@@ -85,118 +91,142 @@
         "mode": "spline"
       },
       "preset": "poster",
-      "source_sha256": "f71ae6afa811500082c55499ed3dc03dbc6dc0f36e271ae8c83a9daf214cfed0",
-      "use_palette": true
+      "source_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002",
+      "use_palette": false,
+      "variant": "source",
+      "variant_input": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
+      "variant_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002"
     },
     {
       "file": "candidate_05.svg",
-      "filter_speckle": 2,
-      "hierarchical": "stacked",
+      "filter_speckle": 8,
+      "hierarchical": "cutout",
       "index": 5,
-      "output_sha256": "9997291244e2d6e4ad03613853a4a6dbed6505b5f4664108b51dd7dbd1528d95",
+      "output_sha256": "c28cd3c8935c60c41da52ac297644f5ba8658480d601fb6600717dc875a50595",
       "palette_quantized_sha256": null,
       "params": {
-        "colormode": "binary",
-        "filter_speckle": 2,
-        "hierarchical": "stacked"
+        "color_precision": 6,
+        "colormode": "color",
+        "filter_speckle": 8,
+        "hierarchical": "cutout",
+        "layer_difference": 16,
+        "mode": "spline"
       },
-      "preset": "bw",
-      "source_sha256": "f71ae6afa811500082c55499ed3dc03dbc6dc0f36e271ae8c83a9daf214cfed0",
-      "use_palette": false
+      "preset": "poster",
+      "source_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002",
+      "use_palette": false,
+      "variant": "source",
+      "variant_input": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
+      "variant_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002"
     },
     {
       "file": "candidate_06.svg",
-      "filter_speckle": 2,
-      "hierarchical": "stacked",
+      "filter_speckle": 16,
+      "hierarchical": "cutout",
       "index": 6,
-      "output_sha256": "b830d19e5005b74edbd67b6797cde39481cf16a36ed6fda6b8747c35013deb32",
-      "palette_quantized_sha256": "2d57c8b0244c4e13011115252871ed2747b750d82fca443ae67be0b2e2950c6c",
+      "output_sha256": "c28cd3c8935c60c41da52ac297644f5ba8658480d601fb6600717dc875a50595",
+      "palette_quantized_sha256": null,
       "params": {
-        "colormode": "binary",
-        "filter_speckle": 2,
-        "hierarchical": "stacked"
+        "color_precision": 6,
+        "colormode": "color",
+        "filter_speckle": 16,
+        "hierarchical": "cutout",
+        "layer_difference": 16,
+        "mode": "spline"
       },
-      "preset": "bw",
-      "source_sha256": "f71ae6afa811500082c55499ed3dc03dbc6dc0f36e271ae8c83a9daf214cfed0",
-      "use_palette": true
+      "preset": "poster",
+      "source_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002",
+      "use_palette": false,
+      "variant": "source",
+      "variant_input": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
+      "variant_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002"
     },
     {
       "file": "candidate_07.svg",
       "filter_speckle": 2,
-      "hierarchical": "stacked",
+      "hierarchical": "cutout",
       "index": 7,
-      "output_sha256": "f884b113d2740ef23dce2ac631c74a27b14d70c2f00e0640b621a2ab7fe696b8",
-      "palette_quantized_sha256": null,
+      "output_sha256": "cfe2a30a8161188e8aee0d9ce7b73cb252becfe2254367d106d896a5a3064a9d",
+      "palette_quantized_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002",
       "params": {
-        "color_precision": 6,
-        "colormode": "color",
+        "colormode": "binary",
         "filter_speckle": 2,
-        "hierarchical": "stacked",
-        "layer_difference": 16,
-        "mode": "spline"
+        "hierarchical": "cutout"
       },
-      "preset": "poster",
-      "source_sha256": "f71ae6afa811500082c55499ed3dc03dbc6dc0f36e271ae8c83a9daf214cfed0",
-      "use_palette": false
+      "preset": "bw",
+      "source_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002",
+      "use_palette": true,
+      "variant": "source",
+      "variant_input": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
+      "variant_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002"
     },
     {
       "file": "candidate_08.svg",
-      "filter_speckle": 2,
-      "hierarchical": "stacked",
+      "filter_speckle": 8,
+      "hierarchical": "cutout",
       "index": 8,
-      "output_sha256": "3445b5599664219605a8f425b660f50eb9b9efd6d14bdf0dc76daf68541c4c9e",
-      "palette_quantized_sha256": "2d57c8b0244c4e13011115252871ed2747b750d82fca443ae67be0b2e2950c6c",
+      "output_sha256": "cfe2a30a8161188e8aee0d9ce7b73cb252becfe2254367d106d896a5a3064a9d",
+      "palette_quantized_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002",
+      "params": {
+        "colormode": "binary",
+        "filter_speckle": 8,
+        "hierarchical": "cutout"
+      },
+      "preset": "bw",
+      "source_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002",
+      "use_palette": true,
+      "variant": "source",
+      "variant_input": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
+      "variant_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002"
+    },
+    {
+      "file": "candidate_09.svg",
+      "filter_speckle": 16,
+      "hierarchical": "cutout",
+      "index": 9,
+      "output_sha256": "cfe2a30a8161188e8aee0d9ce7b73cb252becfe2254367d106d896a5a3064a9d",
+      "palette_quantized_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002",
+      "params": {
+        "colormode": "binary",
+        "filter_speckle": 16,
+        "hierarchical": "cutout"
+      },
+      "preset": "bw",
+      "source_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002",
+      "use_palette": true,
+      "variant": "source",
+      "variant_input": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
+      "variant_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002"
+    },
+    {
+      "file": "candidate_10.svg",
+      "filter_speckle": 2,
+      "hierarchical": "cutout",
+      "index": 10,
+      "output_sha256": "c28cd3c8935c60c41da52ac297644f5ba8658480d601fb6600717dc875a50595",
+      "palette_quantized_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002",
       "params": {
         "color_precision": 6,
         "colormode": "color",
         "filter_speckle": 2,
-        "hierarchical": "stacked",
+        "hierarchical": "cutout",
         "layer_difference": 16,
         "mode": "spline"
       },
       "preset": "poster",
-      "source_sha256": "f71ae6afa811500082c55499ed3dc03dbc6dc0f36e271ae8c83a9daf214cfed0",
-      "use_palette": true
-    },
-    {
-      "file": "candidate_09.svg",
-      "filter_speckle": 8,
-      "hierarchical": "cutout",
-      "index": 9,
-      "output_sha256": "8c16efbd7cfff6dda34f71dfdce1e23ad1f5cd91ab4866561f79dfee63d5ca4f",
-      "palette_quantized_sha256": null,
-      "params": {
-        "colormode": "binary",
-        "filter_speckle": 8,
-        "hierarchical": "cutout"
-      },
-      "preset": "bw",
-      "source_sha256": "f71ae6afa811500082c55499ed3dc03dbc6dc0f36e271ae8c83a9daf214cfed0",
-      "use_palette": false
-    },
-    {
-      "file": "candidate_10.svg",
-      "filter_speckle": 8,
-      "hierarchical": "cutout",
-      "index": 10,
-      "output_sha256": "181cdafb3033c2e2d2e837304b90c748dd7b4e964c0934dd44157ce5caa9efed",
-      "palette_quantized_sha256": "2d57c8b0244c4e13011115252871ed2747b750d82fca443ae67be0b2e2950c6c",
-      "params": {
-        "colormode": "binary",
-        "filter_speckle": 8,
-        "hierarchical": "cutout"
-      },
-      "preset": "bw",
-      "source_sha256": "f71ae6afa811500082c55499ed3dc03dbc6dc0f36e271ae8c83a9daf214cfed0",
-      "use_palette": true
+      "source_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002",
+      "use_palette": true,
+      "variant": "source",
+      "variant_input": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
+      "variant_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002"
     },
     {
       "file": "candidate_11.svg",
       "filter_speckle": 8,
       "hierarchical": "cutout",
       "index": 11,
-      "output_sha256": "5f8c09279ce19e8b021bd9def634df21652576664bfb62f0359c16bd5b5e664d",
-      "palette_quantized_sha256": null,
+      "output_sha256": "c28cd3c8935c60c41da52ac297644f5ba8658480d601fb6600717dc875a50595",
+      "palette_quantized_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002",
       "params": {
         "color_precision": 6,
         "colormode": "color",
@@ -206,38 +236,44 @@
         "mode": "spline"
       },
       "preset": "poster",
-      "source_sha256": "f71ae6afa811500082c55499ed3dc03dbc6dc0f36e271ae8c83a9daf214cfed0",
-      "use_palette": false
+      "source_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002",
+      "use_palette": true,
+      "variant": "source",
+      "variant_input": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
+      "variant_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002"
     },
     {
       "file": "candidate_12.svg",
-      "filter_speckle": 8,
+      "filter_speckle": 16,
       "hierarchical": "cutout",
       "index": 12,
-      "output_sha256": "cc6ca28ae4c992c45f0a3e7eb0a82900b92f19bf021f39d3379e9a9daa6213b4",
-      "palette_quantized_sha256": "2d57c8b0244c4e13011115252871ed2747b750d82fca443ae67be0b2e2950c6c",
+      "output_sha256": "c28cd3c8935c60c41da52ac297644f5ba8658480d601fb6600717dc875a50595",
+      "palette_quantized_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002",
       "params": {
         "color_precision": 6,
         "colormode": "color",
-        "filter_speckle": 8,
+        "filter_speckle": 16,
         "hierarchical": "cutout",
         "layer_difference": 16,
         "mode": "spline"
       },
       "preset": "poster",
-      "source_sha256": "f71ae6afa811500082c55499ed3dc03dbc6dc0f36e271ae8c83a9daf214cfed0",
-      "use_palette": true
+      "source_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002",
+      "use_palette": true,
+      "variant": "source",
+      "variant_input": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
+      "variant_sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002"
     }
   ],
   "determinism_note": "VTracer output is deterministic for a fixed version, input and parameter set; verified by tests/test_trace_sweep.py (two runs are byte-identical). If a future tracer is not, set deterministic=false here.",
   "deterministic": true,
-  "generated": "2026-09-24T04:04:25+00:00",
+  "generated": "2026-09-26T08:03:42+00:00",
   "input": {
-    "file": "01_prepped/00-example.prepped.png",
-    "sha256": "f71ae6afa811500082c55499ed3dc03dbc6dc0f36e271ae8c83a9daf214cfed0"
+    "file": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
+    "sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002"
   },
   "skipped_axes": {},
-  "spec": "spec.json",
+  "spec": "/home/monop/Documents/GitHub/chopshop-svg/spec.json",
   "sweep": {
     "filter_speckle": [
       2,
