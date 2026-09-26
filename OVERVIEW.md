@@ -267,11 +267,11 @@ against 0.00–0.20% for every flat file in the batch.
 
 ## Current state — what's verified
 
-**246 tests, all passing** (`pytest tests/`), lint clean. The back half:
+**363 tests, all passing** (`pytest tests/`), lint clean. The back half:
 
 | suite | tests | covers |
 |---|---|---|
-| `test_validate_svg.py` | 90 | every Layer A rule, unit scale, cascade, malformed input |
+| `test_validate_svg.py` | 91 | every Layer A rule, unit scale, cascade, malformed input |
 | `test_preflight.py` | 52 | ink measurement, tone detection, gate classification, garment assumption |
 | `test_snap_colors.py` | 8 | colour snapping incl. CSS cascade writes |
 | `test_validate_svg_negative.py` | 4 | the four headline failure modes, as a standalone contract |
@@ -425,7 +425,7 @@ scripts/run_batch.py       batch runner
 scripts/prep_raster.py     front half — raster prep (check-first)
 scripts/trace_sweep.py     front half — VTracer candidate sweep
 scripts/compare_candidates.py  front half — Layer A/B + fidelity report
-tests/                     246 tests
+tests/                     363 tests
 00_source/                 input artwork (+ the test batch)
 01_prepped/ 02_traced/ 03_cleaned/   stages 1–3 (front half writes 01/02)
 04_validated/              Layer A output + batch_results.json + comparison reports
