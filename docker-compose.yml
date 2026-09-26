@@ -22,13 +22,13 @@ services:
       RUNNER_PORT: "8787"
       RUNNER_BIND: "0.0.0.0"
       RUNNER_ROOT: /data/jobs
-      HOST_UPLOAD_ROOT: /home/unodos/chopshop-studio/public/uploads
+      HOST_UPLOAD_ROOT: /home/unodos/chopshop-studio/storage/uploads
       CONTAINER_UPLOAD_ROOT: /data/uploads
     ports:
       - "127.0.0.1:8787:8787"
     volumes:
       - ./runner-data/jobs:/data/jobs
-      - /home/unodos/chopshop-studio/public/uploads:/data/uploads:ro
+      - /home/unodos/chopshop-studio/storage/uploads:/data/uploads:ro
       - ./01_prepped:/app/01_prepped
       - ./02_traced:/app/02_traced
       - ./03_cleaned:/app/03_cleaned
