@@ -74,6 +74,16 @@ def artifact_path(root: Path, *, stem: str, name: str, job_dir: Path) -> Path | 
     local = job_dir / name
     if local.is_file():
         return local
+    # Source raster: Rails requests ``source.png``, but the original upload keeps
+    # its own name/extension under ``input/``. Serve it when no canonical source
+    # file exists at the job root (older jobs predate one).
+    if name.startswith("source."):
+        input_dir = job_dir / "input"
+        if input_dir.is_dir():
+            for candidate in sorted(p for p in input_dir.iterdir() if p.is_file()):
+                if candidate.suffix.lower() in (".png", ".jpg", ".jpeg",
+                                                ".tif", ".tiff", ".webp"):
+                    return candidate
     traced = root / "02_traced" / stem / name
     if traced.is_file():
         return traced
@@ -313,8 +323,46 @@ class Handler(BaseHTTPRequestHandler):
         self.json_response(404, {"error": "unknown route"})
 
 
+def reindex_jobs() -> None:
+    """Rebuild the in-memory JOBS index from disk so completed jobs' files
+    survive a container restart. State is otherwise memory-only; without this,
+    every ``/files/<job_id>/...`` request 404s after the runner restarts even
+    though the artifacts are still on the bind mount."""
+    for job_dir in sorted(p for p in JOBS_ROOT.iterdir() if p.is_dir()):
+        job_id = job_dir.name
+        comparison = None
+        candidates: list = []
+        cmp_path = job_dir / "comparison.json"
+        if cmp_path.is_file():
+            try:
+                comparison = json.loads(cmp_path.read_text(encoding="utf-8"))
+                candidates = list(comparison.get("candidates", []))
+            except (OSError, json.JSONDecodeError):
+                comparison = None
+        spec: dict = {}
+        spec_path = job_dir / "spec.json"
+        if spec_path.is_file():
+            try:
+                loaded = json.loads(spec_path.read_text(encoding="utf-8"))
+                spec = loaded if isinstance(loaded, dict) else {}
+            except (OSError, json.JSONDecodeError):
+                spec = {}
+        stem = ""
+        input_dir = job_dir / "input"
+        if input_dir.is_dir():
+            inputs = sorted(p for p in input_dir.iterdir() if p.is_file())
+            if inputs:
+                stem = inputs[0].stem
+        JOBS[job_id] = {
+            "id": job_id, "name": job_id, "stem": stem, "dir": str(job_dir),
+            "spec": spec, "state": "done", "log": [], "candidates": candidates,
+            "comparison": comparison, "prep_summary": None, "error": None,
+        }
+
+
 def main() -> None:
     JOBS_ROOT.mkdir(parents=True, exist_ok=True)
+    reindex_jobs()
     server = ThreadingHTTPServer((HOST_BIND, PORT), Handler)
     print(f"real runner on {HOST_BIND}:{PORT}, root={JOBS_ROOT}", flush=True)
     server.serve_forever()
