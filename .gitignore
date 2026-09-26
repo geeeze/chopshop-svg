@@ -26,3 +26,8 @@ runner-data/
 *.swp
 *.kate-swp
 *~
+
+# Host-local compose override and dotenv: machine-specific paths and secrets,
+# never tracked (this repo is public).
+docker-compose.override.yml
+.env

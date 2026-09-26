@@ -100,3 +100,118 @@ def test_artifact_lookup_prefers_validation_output(tmp_path):
         name="candidate_02.proof.png",
         job_dir=tmp_path / "jobs" / "abc",
     ) == output
+
+
+# ------------------------------------------------------------- optional Jev --
+#
+# The annotator is a separate deliverable (chopshop-jev) mounted into the
+# runner, and the key is operator-supplied. These tests pin the two things that
+# actually bit: an unconfigured add-on must explain itself (never a 404 that
+# reads like a missing route), and the envelope handed back to the studio must
+# keep the annotator's answers verbatim rather than a re-derived copy.
+
+def _fake_annotator(tmp_path, sidecar_body: str, *, exit_code: int = 0) -> Path:
+    """A stand-in annotator that writes a sidecar to --output."""
+    script = tmp_path / "jev_annotate.py"
+    script.write_text(
+        "import json, sys\n"
+        "def arg(name):\n"
+        "    return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else None\n"
+        f"code = {exit_code}\n"
+        "out = arg('--output')\n"
+        f"body = {sidecar_body!r}\n"
+        "if out and code == 0:\n"
+        "    open(out, 'w', encoding='utf-8').write(body)\n"
+        "if code:\n"
+        "    sys.stderr.write('boom: annotator exploded')\n"
+        "sys.exit(code)\n",
+        encoding="utf-8",
+    )
+    return script
+
+
+def test_jev_reason_names_the_first_missing_piece(monkeypatch):
+    monkeypatch.delenv("JEV_ANNOTATOR", raising=False)
+    assert "JEV_ANNOTATOR" in runner.jev_unavailable_reason()
+
+    monkeypatch.setenv("JEV_ANNOTATOR", "/nonexistent/jev_annotate.py")
+    assert "not found" in runner.jev_unavailable_reason()
+
+    # The script resolves, so the next missing piece is the key — presented
+    # first, because that is the one the operator can actually fix.
+    monkeypatch.setenv("JEV_ANNOTATOR", str(MODULE_PATH))
+    monkeypatch.delenv("JEV_API_KEY", raising=False)
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    assert "JEV_API_KEY" in runner.jev_unavailable_reason()
+
+    monkeypatch.setenv("JEV_API_KEY", "test-key")
+    assert runner.jev_unavailable_reason() is None
+
+
+def test_health_reports_jev_readiness(monkeypatch):
+    monkeypatch.setenv("CHOPSHOP_RUNNER_LABEL", "some-deployment")
+    monkeypatch.setenv("JEV_ANNOTATOR", str(MODULE_PATH))
+    monkeypatch.setenv("JEV_API_KEY", "test-key")
+    assert runner.health_payload()["tools"]["jev"] is True
+
+    monkeypatch.delenv("JEV_API_KEY", raising=False)
+    assert runner.health_payload()["tools"]["jev"] is False
+
+
+def test_run_jev_passes_the_annotators_answers_through(tmp_path, monkeypatch):
+    sidecar = (
+        '{"schema": "chopshop-jev-annotation-0.4", "model": "jev-1.13.0",'
+        ' "status": "ok",'
+        ' "answers": {"failure_mode": {"type": "choice", "choice": "screen_explosion",'
+        ' "confidence": 0.78}, "tonal_structure": {"type": "score", "score": 0.35,'
+        ' "probabilities": {"0": 0.76, "3": 0.03}}},'
+        ' "verdict": {"headline": "screen_explosion"}}'
+    )
+    script = _fake_annotator(tmp_path, sidecar)
+    manifest = tmp_path / "candidate_11.manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setenv("JEV_ANNOTATOR", str(script))
+    monkeypatch.setenv("JEV_API_KEY", "test-key")
+    monkeypatch.delenv("JEV_ENDPOINT", raising=False)
+
+    result = runner.run_jev(manifest)
+
+    assert result["model"] == "jev-1.13.0"
+    assert result["endpoint"] == runner.JEV_DEFAULT_ENDPOINT
+    assert result["answers"]["failure_mode"]["choice"] == "screen_explosion"
+    assert result["answers"]["tonal_structure"]["score"] == 0.35
+    assert result["verdict"] == {"headline": "screen_explosion"}
+    assert isinstance(result["latency_ms"], int)
+
+
+def test_run_jev_surfaces_an_annotator_failure_as_the_reason(tmp_path, monkeypatch):
+    script = _fake_annotator(tmp_path, "{}", exit_code=3)
+    manifest = tmp_path / "m.manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("JEV_ANNOTATOR", str(script))
+    monkeypatch.setenv("JEV_API_KEY", "test-key")
+
+    try:
+        runner.run_jev(manifest)
+    except runner.JevUnavailable as exc:
+        assert "boom: annotator exploded" in str(exc)
+    else:
+        raise AssertionError("a failed annotator must not return an envelope")
+
+
+def test_run_jev_reports_a_skipped_annotator_with_its_reason(tmp_path, monkeypatch):
+    """--optional style skip (no key on the other side) must not read as success."""
+    sidecar = '{"status": "skipped", "reason": "JEV_API_KEY is not set", "answers": {}}'
+    script = _fake_annotator(tmp_path, sidecar)
+    manifest = tmp_path / "m.manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("JEV_ANNOTATOR", str(script))
+    monkeypatch.setenv("JEV_API_KEY", "test-key")
+
+    try:
+        runner.run_jev(manifest)
+    except runner.JevUnavailable as exc:
+        assert "JEV_API_KEY is not set" in str(exc)
+    else:
+        raise AssertionError("a skipped annotation must not return an envelope")
