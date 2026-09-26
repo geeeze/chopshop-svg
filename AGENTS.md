@@ -167,6 +167,20 @@ comparison, or prep behaviour.
   and design decisions this file only summarises. `skills/README.md` explains
   how to re-import them into a Hermes install.
 - `scripts/FRONT_HALF.md` — front-half design (sweep, fidelity, parallelism).
+- `scripts/node_reduce.py` — the `geometry_overload` remedy. Targeted by
+  default: only paths over `geometry.max_nodes_per_path` are fitted, because
+  simplifying a whole file measurably RAISES the worst path. Regression
+  rejection is transactional (fits are staged; the run is rejected if any path
+  grew). Every reduction bug found during development reported success while
+  damaging geometry, so the tool refuses anything it cannot verify and
+  `tune_sweep.py` re-checks `Z`/`M` counts on its output. `--verify` renders
+  before/after and reports ink drift and the largest background blob — the
+  node count clearing the gate says nothing about whether the art survived.
+  See `scripts/NODE_REDUCTION.md`.
+- `scripts/tune_sweep.py` — batch experiment bench over trace settings against
+  one raster. NOT the candidate generator (`trace_sweep.py` is). Ranks by
+  MAE_art as a measurement order and never recommends a cell, per the law
+  above. Writes `08_tune/<stem>/tune.{md,json}` + an optional contact sheet.
 - `scripts/palette_variants.py` — auxiliary Chopshop-Aided-Design layer (wired
   into no stage): re-colours a finished trace onto the palettes in
   `scripts/palettes.json`, leaving the geometry untouched (only
@@ -177,5 +191,5 @@ comparison, or prep behaviour.
 - `OVERVIEW.md`, `HOWTO-print-check.md` — design and print-check walkthrough.
 - `spec.json` / `spec.example.json` — the job contract (front-half keys are
   under `print`: `assume_opaque_bg`, `prep_colors`, `background_hex`,
-  `sweep_max_candidates`).
+  `sweep_max_candidates`, `invert`).
 - `requirements.txt` — required + optional deps, with install notes.
