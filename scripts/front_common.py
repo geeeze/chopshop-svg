@@ -31,6 +31,7 @@ PRINT_DEFAULTS = {
     "prep_colors": 16,
     "background_hex": "#ffffff",
     "sweep_max_candidates": 12,
+    "pitch_shift": False,
 }
 
 # The dpi used for prep/trace when spec.print.dpi is absent.

@@ -69,6 +69,14 @@ if [ ! -x "$PY" ]; then
   exit 2
 fi
 
+# --------------------------------------------------------------------------
+# disk capacity gate: warn below 2GB, refuse below 1GB (disk_check.py exits 2)
+# --------------------------------------------------------------------------
+if ! "$PY" "$PROJECT/scripts/disk_check.py" "$PROJECT"; then
+  echo "disk capacity gate refused the run (free < 1GiB) -- free space first" >&2
+  exit 2
+fi
+
 mkdir -p "$PROJECT/01_prepped" "$PROJECT/02_traced" "$PROJECT/04_validated"
 STEM="$(basename "$INPUT")"
 STEM="${STEM%.*}"

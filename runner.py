@@ -29,6 +29,30 @@ PIPELINE_LOCK = threading.Lock()
 STATE_LOCK = threading.Lock()
 JOBS: dict[str, dict] = {}
 VALIDATIONS: dict[str, dict] = {}
+MIN_ARCHIVE_FREE = 1 * 1024 ** 3  # refuse to build a 7z archive below 1 GiB free
+
+
+class Cancelled(Exception):
+    """Raised by a worker to signal an operator-cancelled job."""
+
+
+def free_bytes(path: Path) -> int:
+    return shutil.disk_usage(path).free
+
+
+def build_archive(job_dir: Path, name: str) -> Path | None:
+    """7z the whole job directory (contents under one folder). Returns the
+    archive path, or None when 7z is missing or fails."""
+    seven = shutil.which("7z") or shutil.which("7za") or shutil.which("7zr")
+    if not seven:
+        return None
+    out = job_dir.parent / f"{name}.7z"
+    cmd = [seven, "a", "-t7z", "-mx=5", "-y", "-bd", str(out), str(job_dir)]
+    proc = subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL, timeout=300)
+    if proc.returncode != 0 or not out.is_file():
+        return None
+    return out
 
 
 def slug(name: str) -> str:
@@ -74,6 +98,16 @@ def artifact_path(root: Path, *, stem: str, name: str, job_dir: Path) -> Path | 
     local = job_dir / name
     if local.is_file():
         return local
+    # Source raster: Rails requests ``source.png``, but the original upload keeps
+    # its own name/extension under ``input/``. Serve it when no canonical source
+    # file exists at the job root (older jobs predate one).
+    if name.startswith("source."):
+        input_dir = job_dir / "input"
+        if input_dir.is_dir():
+            for candidate in sorted(p for p in input_dir.iterdir() if p.is_file()):
+                if candidate.suffix.lower() in (".png", ".jpg", ".jpeg",
+                                                ".tif", ".tiff", ".webp"):
+                    return candidate
     traced = root / "02_traced" / stem / name
     if traced.is_file():
         return traced
@@ -103,9 +137,16 @@ def _run_logged(job: dict, command: list[str], env: dict[str, str]) -> int:
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1,
     )
     assert process.stdout is not None
-    for line in process.stdout:
-        _append_log(job, line)
-    return process.wait()
+    job["proc"] = process
+    try:
+        for line in process.stdout:
+            _append_log(job, line)
+            if job.get("cancel") and process.poll() is None:
+                process.terminate()
+    finally:
+        code = process.wait()
+        job["proc"] = None
+    return code
 
 
 def _copy_front_outputs(job: dict, stem: str) -> list[dict]:
@@ -153,6 +194,8 @@ def _publish_source_previews(job: dict, stem: str) -> dict:
 
 def run_front(job: dict) -> None:
     with PIPELINE_LOCK:
+        if job.get("cancel"):
+            raise Cancelled()
         job["state"] = "running"
         source = Path(job["container_input_path"])
         normalized = normalize_input(source, Path(job["dir"]) / "input" / source.name,
@@ -168,6 +211,8 @@ def run_front(job: dict) -> None:
         _append_log(job, f"front pipeline: {input_path}")
         code = _run_logged(job, [str(PROJECT / "front_pipeline.sh"), str(input_path)],
                            {"SPEC": str(spec_path), "FRONT_PIPELINE_WORKERS": "1"})
+        if job.get("cancel"):
+            raise Cancelled()
         prep = PROJECT / "01_prepped" / f"{stem}.prep.json"
         prep_summary = json.loads(prep.read_text(encoding="utf-8")) if prep.is_file() else None
         previews = _publish_source_previews(job, stem)
@@ -219,6 +264,9 @@ def run_back(validation: dict) -> None:
 def guarded(fn, item: dict) -> None:
     try:
         fn(item)
+    except Cancelled:
+        with STATE_LOCK:
+            item.update(state="cancelled", error="cancelled by operator")
     except Exception as exc:
         with STATE_LOCK:
             item.update(state="error", error=f"{type(exc).__name__}: {exc}")
@@ -249,17 +297,19 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return {}
 
-    def serve_file(self, path: Path, download: str):
+    def serve_file(self, path: Path, download: str, attachment: bool = False):
         if not path.is_file():
             self.json_response(404, {"error": "not found"})
             return
         content_types = {".svg": "image/svg+xml", ".png": "image/png",
-                         ".pdf": "application/pdf", ".json": "application/json"}
+                         ".pdf": "application/pdf", ".json": "application/json",
+                         ".7z": "application/x-7z-compressed"}
         data = path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", content_types.get(path.suffix, "application/octet-stream"))
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Content-Disposition", f'inline; filename="{download}"')
+        disposition = "attachment" if attachment else "inline"
+        self.send_header("Content-Disposition", f'{disposition}; filename="{download}"')
         self.end_headers()
         self.wfile.write(data)
 
@@ -297,6 +347,30 @@ class Handler(BaseHTTPRequestHandler):
                     "candidate_count": len(job.get("candidates", [])),
                     "comparison": job.get("comparison"), "error": job.get("error")})
             return
+        if len(parts) == 3 and parts[0] == "jobs" and parts[2] == "archive":
+            job = JOBS.get(parts[1])
+            if not job:
+                self.json_response(404, {"error": "no such job"})
+                return
+            if job["state"] != "done":
+                self.json_response(409, {"error": f"job not done ({job['state']})"})
+                return
+            job_dir = Path(job["dir"])
+            if not job_dir.is_dir():
+                self.json_response(404, {"error": "job dir missing"})
+                return
+            if free_bytes(job_dir) < MIN_ARCHIVE_FREE:
+                self.json_response(507, {"error": "insufficient disk to archive"})
+                return
+            archive = build_archive(job_dir, parts[1])
+            if archive is None:
+                self.json_response(500, {"error": "7z unavailable or failed"})
+                return
+            try:
+                self.serve_file(archive, f"{job.get('stem') or parts[1]}.7z", attachment=True)
+            finally:
+                archive.unlink(missing_ok=True)
+            return
         if len(parts) == 2 and parts[0] == "validations":
             validation = VALIDATIONS.get(parts[1])
             if not validation:
@@ -330,11 +404,28 @@ class Handler(BaseHTTPRequestHandler):
             job = {"id": job_id, "name": name, "stem": slug(name), "dir": str(job_dir),
                    "container_input_path": input_path, "spec": body.get("spec") or {},
                    "state": "queued", "log": [], "candidates": [], "comparison": None,
-                   "prep_summary": None, "error": None}
+                   "prep_summary": None, "error": None, "cancel": False, "proc": None}
             with STATE_LOCK:
                 JOBS[job_id] = job
             threading.Thread(target=guarded, args=(run_front, job), daemon=True).start()
             self.json_response(202, {"id": job_id, "stem": job["stem"]})
+            return
+        if len(parts) == 3 and parts[0] == "jobs" and parts[2] == "cancel":
+            job = JOBS.get(parts[1])
+            if not job:
+                self.json_response(404, {"error": "no such job"})
+                return
+            with STATE_LOCK:
+                if job["state"] in ("queued", "running"):
+                    job["cancel"] = True
+                    proc = job.get("proc")
+                    if proc is not None and proc.poll() is None:
+                        proc.terminate()
+                    self.json_response(200, {"state": "cancelling"})
+                elif job["state"] == "cancelled":
+                    self.json_response(200, {"state": "cancelled"})
+                else:
+                    self.json_response(409, {"state": job["state"]})
             return
         if self.path == "/validations":
             job = JOBS.get(body.get("job_id"))
@@ -355,9 +446,72 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.json_response(404, {"error": "unknown route"})
 
+    def do_DELETE(self):
+        if not self.authorized():
+            self.json_response(401, {"error": "unauthorized"})
+            return
+        parts = [part for part in self.path.split("/") if part]
+        if len(parts) == 2 and parts[0] == "jobs":
+            job = JOBS.get(parts[1])
+            if not job:
+                self.json_response(404, {"error": "no such job"})
+                return
+            job_dir = Path(job["dir"])
+            with STATE_LOCK:
+                if job["state"] in ("queued", "running"):
+                    job["cancel"] = True
+                    proc = job.get("proc")
+                    if proc is not None and proc.poll() is None:
+                        proc.terminate()
+                JOBS.pop(parts[1], None)
+            if job_dir.is_dir():
+                shutil.rmtree(job_dir, ignore_errors=True)
+            self.json_response(200, {"deleted": parts[1]})
+            return
+        self.json_response(404, {"error": "unknown route"})
+
+
+def reindex_jobs() -> None:
+    """Rebuild the in-memory JOBS index from disk so completed jobs' files
+    survive a container restart. State is otherwise memory-only; without this,
+    every ``/files/<job_id>/...`` request 404s after the runner restarts even
+    though the artifacts are still on the bind mount."""
+    for job_dir in sorted(p for p in JOBS_ROOT.iterdir() if p.is_dir()):
+        job_id = job_dir.name
+        comparison = None
+        candidates: list = []
+        cmp_path = job_dir / "comparison.json"
+        if cmp_path.is_file():
+            try:
+                comparison = json.loads(cmp_path.read_text(encoding="utf-8"))
+                candidates = list(comparison.get("candidates", []))
+            except (OSError, json.JSONDecodeError):
+                comparison = None
+        spec: dict = {}
+        spec_path = job_dir / "spec.json"
+        if spec_path.is_file():
+            try:
+                loaded = json.loads(spec_path.read_text(encoding="utf-8"))
+                spec = loaded if isinstance(loaded, dict) else {}
+            except (OSError, json.JSONDecodeError):
+                spec = {}
+        stem = ""
+        input_dir = job_dir / "input"
+        if input_dir.is_dir():
+            inputs = sorted(p for p in input_dir.iterdir() if p.is_file())
+            if inputs:
+                stem = inputs[0].stem
+        JOBS[job_id] = {
+            "id": job_id, "name": job_id, "stem": stem, "dir": str(job_dir),
+            "spec": spec, "state": "done", "log": [], "candidates": candidates,
+            "comparison": comparison, "prep_summary": None, "error": None,
+            "cancel": False, "proc": None,
+        }
+
 
 def main() -> None:
     JOBS_ROOT.mkdir(parents=True, exist_ok=True)
+    reindex_jobs()
     server = ThreadingHTTPServer((HOST_BIND, PORT), Handler)
     print(f"real runner on {HOST_BIND}:{PORT}, root={JOBS_ROOT}", flush=True)
     server.serve_forever()
