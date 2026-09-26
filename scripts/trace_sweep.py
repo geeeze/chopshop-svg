@@ -21,13 +21,26 @@ Tracer selection (in order):
 If none are available the script exits 3 naming both tools and their install
 commands.
 
-Default sweep (overridable with --sweep, capped by spec.print.sweep_max_candidates):
+Sweep configuration: spec.print.sweep, overridden by --sweep.  The candidate
+cap is spec.print.sweep.max_candidates (or the older spec.print.sweep_max_candidates):
 
   * 3 presets -- bw / poster / photo (photo is dropped when
     spec.geometry.allow_gradients is false);
   * 3 filter_speckle values -- 2 / 8 / 16;
   * 2 hierarchical modes -- cutout / stacked;
   * palette: one candidate pre-quantised to spec.palette, one untouched;
+
+Any axis can be set in the job contract itself, so the studio's spec builder
+can expose the sweep without the runner writing a second file::
+
+    "print": {"sweep": {"presets": ["poster"],
+                        "filter_speckle": [2, 8],
+                        "hierarchical": ["cutout"],
+                        "use_palette": [false],
+                        "max_candidates": 8}}
+
+`--sweep <file>` still works and wins over `print.sweep`; a partial object of
+either kind never drops the axes it does not mention.
   * pitch shift (spec.print.pitch_shift): the palette becomes a transform --
     the source is traced as three variants (source / inverse / pitch) instead
     of one palette-quantised candidate buried in the sweep, and the
@@ -415,10 +428,11 @@ def _sweep(prepped_png, spec, sweep, out_dir, workers=None):
     candidates, skipped_axes = build_candidates(sweep, spec, available_flags,
                                                 backend["note"] or backend["kind"])
 
+    # The cap was already resolved from print.sweep / print.sweep_max_candidates
+    # when the sweep config was merged above -- one place, so the two spellings
+    # cannot disagree about which one wins.
     raw_print = spec.get("print") or {}
-    spec_max = raw_print.get("sweep_max_candidates")
-    max_candidates = (spec_max if spec_max is not None
-                      else sweep.get("max_candidates", 12))
+    max_candidates = sweep.get("max_candidates", 12)
     # Round-robin across (speckle, variant) groups before truncating, so a
     # small cap still samples every speckle value AND every pitch-shift
     # variant.  A plain stride through the nested list would alias onto the
@@ -597,7 +611,27 @@ def main(argv=None):
               file=sys.stderr)
         return 2
 
+    # The sweep axes may come from the SPEC (`print.sweep`) or from a
+    # `--sweep` file.  The spec is the studio's job contract, so a sweep knob
+    # belongs there; `--sweep` stays for a by-hand run and overrides the spec
+    # (most specific wins).  Both are merged over DEFAULT_SWEEP so a partial
+    # object never drops the axes it does not mention.
     sweep = dict(DEFAULT_SWEEP)
+    raw_print = spec.get("print") or {}
+    spec_sweep = raw_print.get("sweep")
+    if spec_sweep is not None and not isinstance(spec_sweep, dict):
+        print("trace_sweep: spec print.sweep must be a JSON object", file=sys.stderr)
+        return 2
+    if isinstance(spec_sweep, dict):
+        sweep.update(spec_sweep)
+        # `print.sweep.max_candidates` and the older `print.sweep_max_candidates`
+        # are the same knob. The namespaced one wins when a spec carries both
+        # (it is the more specific setting); the legacy key stays supported so a
+        # spec written before print.sweep existed keeps its cap.
+        if "max_candidates" not in spec_sweep:
+            legacy = raw_print.get("sweep_max_candidates")
+            if legacy is not None:
+                sweep["max_candidates"] = legacy
     if args.sweep:
         try:
             user = fc.load_json(args.sweep)

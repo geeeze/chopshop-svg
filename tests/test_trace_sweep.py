@@ -31,7 +31,8 @@ pytestmark = pytest.mark.skipif(
     not _has_vtracer, reason="vtracer not installed")
 
 
-def make_spec(tmp_path, allow_gradients=False, palette=None, sweep_max=None):
+def make_spec(tmp_path, allow_gradients=False, palette=None, sweep_max=None,
+              sweep=None, name="spec.json"):
     spec = {
         "print_method": "screen_print",
         "max_colors": 6,
@@ -41,7 +42,9 @@ def make_spec(tmp_path, allow_gradients=False, palette=None, sweep_max=None):
         else ["#000000", "#FFFFFF", "#FF0000"],
         "print": {"dpi": 100, "sweep_max_candidates": sweep_max or 12},
     }
-    path = tmp_path / "spec.json"
+    if sweep is not None:
+        spec["print"]["sweep"] = sweep
+    path = tmp_path / name
     path.write_text(json.dumps(spec), encoding="utf-8")
     return str(path)
 
@@ -432,3 +435,73 @@ def test_parallel_matches_sequential(tmp_path):
     assert s == p
 
 
+# --------------------------------------------------------------------------
+# spec-driven sweep (spec.print.sweep) -- the axes the studio's JSON builder
+# exposes.  The sweep belongs in the job contract; --sweep stays for a
+# by-hand run and wins over the spec.
+# --------------------------------------------------------------------------
+
+def _presets_in(out_dir):
+    sweep = json.load(open(os.path.join(out_dir, "sweep.json"), encoding="utf-8"))
+    return sorted({c["preset"] for c in sweep["candidates"]})
+
+
+def test_spec_presets_limit_the_sweep(tmp_path):
+    png = make_two_colour_png(tmp_path / "art.png")
+    spec = make_spec(tmp_path, sweep={"presets": ["poster"]})
+    code, out_dir = _run(tmp_path, png, spec)
+
+    assert code == 0
+    assert _presets_in(out_dir) == ["poster"]
+
+
+def test_spec_sweep_leaves_unmentioned_axes_at_default(tmp_path):
+    """A partial print.sweep object must not drop the axes it omits."""
+    png = make_two_colour_png(tmp_path / "art.png")
+    spec = make_spec(tmp_path, sweep={"presets": ["bw"]})
+    code, out_dir = _run(tmp_path, png, spec)
+
+    assert code == 0
+    sweep = json.load(open(os.path.join(out_dir, "sweep.json"), encoding="utf-8"))
+    speckles = sorted({c["filter_speckle"] for c in sweep["candidates"]})
+    assert speckles == sorted(trace_sweep.DEFAULT_SWEEP["filter_speckle"])
+
+
+def test_spec_sweep_max_candidates_is_the_cap(tmp_path):
+    png = make_two_colour_png(tmp_path / "art.png")
+    spec = make_spec(tmp_path, sweep={"max_candidates": 3})
+    code, out_dir = _run(tmp_path, png, spec)
+
+    assert code == 0
+    svgs = [f for f in os.listdir(out_dir) if f.endswith(".svg")]
+    assert len(svgs) <= 3
+
+
+def test_legacy_sweep_max_candidates_still_caps(tmp_path):
+    """print.sweep_max_candidates predates print.sweep and is still honoured."""
+    png = make_two_colour_png(tmp_path / "art.png")
+    spec = make_spec(tmp_path, sweep={"presets": ["bw"]}, sweep_max=3)
+    code, out_dir = _run(tmp_path, png, spec)
+
+    assert code == 0
+    svgs = [f for f in os.listdir(out_dir) if f.endswith(".svg")]
+    assert len(svgs) <= 3
+
+
+def test_sweep_file_overrides_spec_sweep(tmp_path):
+    png = make_two_colour_png(tmp_path / "art.png")
+    spec = make_spec(tmp_path, sweep={"presets": ["bw"]})
+    override = tmp_path / "override.json"
+    override.write_text(json.dumps({"presets": ["poster"]}), encoding="utf-8")
+    code, out_dir = _run(tmp_path, png, spec, sweep=str(override))
+
+    assert code == 0
+    assert _presets_in(out_dir) == ["poster"]
+
+
+def test_spec_sweep_that_is_not_an_object_is_refused(tmp_path):
+    png = make_two_colour_png(tmp_path / "art.png")
+    spec = make_spec(tmp_path, sweep=["bw"])
+    code, _ = _run(tmp_path, png, spec)
+
+    assert code == 2
