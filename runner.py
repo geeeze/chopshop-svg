@@ -13,7 +13,10 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
+import tempfile
 import threading
+import time
 import traceback
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -35,6 +38,87 @@ MIN_ARCHIVE_FREE = 1 * 1024 ** 3  # refuse to build a 7z archive below 1 GiB fre
 
 class Cancelled(Exception):
     """Raised by a worker to signal an operator-cancelled job."""
+
+
+class JevUnavailable(Exception):
+    """Raised when the optional Jev add-on cannot be called at all.
+
+    Distinct from a failed call: this is "the add-on is not configured here",
+    which the HTTP layer reports as 503 with the reason, never as a 404 that
+    would read as a missing route.
+    """
+
+
+# ---------- Jev (TypeSafe System One) — optional add-on -----------------------
+#
+# The runner proxies the studio's POST /validations/:id/jev to the chopshop-jev
+# annotator. It deliberately does NOT reimplement the question set, the
+# projection or the verdict: a second copy would drift from the tested one, and
+# the annotator already owns the endpoint/key resolution and the typing rules.
+# The script path and key are configuration, not facts about this machine (this
+# repo is public) — see docker-compose.yml for the env names.
+
+JEV_DEFAULT_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
+JEV_TIMEOUT = float(os.environ.get("JEV_TIMEOUT", "180"))
+
+
+def jev_unavailable_reason() -> str | None:
+    """Return why Jev cannot be called, or None when it can.
+
+    Order matters for diagnosis: the operator who pressed "Ask Jev" gets the
+    first missing piece, not a generic failure.
+    """
+    annotator = os.environ.get("JEV_ANNOTATOR", "")
+    if not annotator:
+        return "JEV_ANNOTATOR is not set on the runner"
+    if not Path(annotator).is_file():
+        return f"Jev annotator not found at {annotator}"
+    if not (os.environ.get("JEV_API_KEY") or os.environ.get("TYPESAFE_API_KEY")):
+        return "JEV_API_KEY is not set on the runner"
+    return None
+
+
+def run_jev(manifest_path: Path) -> dict:
+    """Ask Jev the four advisory questions about one manifest.
+
+    Returns the studio-facing envelope {model, endpoint, latency_ms, answers,
+    verdict}. The annotator writes its sidecar into a temp dir — the job
+    directory belongs to the pipeline (and is root-owned on a bind mount), so
+    it is not ours to write in.
+    """
+    reason = jev_unavailable_reason()
+    if reason:
+        raise JevUnavailable(reason)
+    annotator = os.environ["JEV_ANNOTATOR"]
+    with tempfile.TemporaryDirectory() as tmp:
+        output = Path(tmp) / "jev.json"
+        started = time.monotonic()
+        try:
+            proc = subprocess.run(
+                [sys.executable, annotator, str(manifest_path), "--output", str(output)],
+                capture_output=True, text=True, timeout=JEV_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise JevUnavailable(f"Jev annotator timed out after {JEV_TIMEOUT:.0f}s") from exc
+        latency_ms = int((time.monotonic() - started) * 1000)
+        if proc.returncode != 0 or not output.is_file():
+            lines = [ln for ln in (proc.stderr or proc.stdout or "").splitlines() if ln.strip()]
+            detail = lines[-1] if lines else f"annotator exited {proc.returncode}"
+            raise JevUnavailable(f"Jev annotator failed: {detail}")
+        try:
+            sidecar = json.loads(output.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise JevUnavailable(f"Jev annotator wrote invalid JSON: {exc}") from exc
+    if sidecar.get("status") != "ok":
+        detail = sidecar.get("reason") or "no reason given"
+        raise JevUnavailable(f"Jev annotator status {sidecar.get('status')}: {detail}")
+    return {
+        "model": sidecar.get("model"),
+        "endpoint": os.environ.get("JEV_ENDPOINT") or JEV_DEFAULT_ENDPOINT,
+        "latency_ms": latency_ms,
+        "answers": sidecar.get("answers") or {},
+        "verdict": sidecar.get("verdict"),
+    }
 
 
 def free_bytes(path: Path) -> int:
@@ -77,6 +161,10 @@ def health_payload() -> dict:
         "tools": {
             "inkscape": shutil.which("inkscape") is not None,
             "gs": shutil.which("gs") is not None,
+            # Optional add-on readiness, reported so an unset key is visible
+            # BEFORE the operator presses "Ask Jev" (the studio proxies this
+            # through RunnerClient.health).
+            "jev": jev_unavailable_reason() is None,
         },
     }
 
@@ -465,6 +553,43 @@ class Handler(BaseHTTPRequestHandler):
                 VALIDATIONS[validation_id] = validation
             threading.Thread(target=guarded, args=(run_back, validation), daemon=True).start()
             self.json_response(202, {"id": validation_id})
+            return
+        if len(parts) == 3 and parts[0] == "validations" and parts[2] == "jev":
+            # Ask the optional Jev add-on the four advisory questions about this
+            # validation's manifest. Blocking (a live call takes ~40s) but this
+            # server is threaded, so other requests are unaffected.
+            validation = VALIDATIONS.get(parts[1])
+            job = None
+            candidate_file = None
+            if validation:
+                job = JOBS.get(validation["job_id"])
+                candidate_file = validation["candidate_file"]
+                if validation["state"] != "done":
+                    self.json_response(409, {"error": f"validation not ready ({validation['state']})"})
+                    return
+            else:
+                # Validations are in memory only, so a runner restart forgets
+                # every one of them even though the artifacts are still on the
+                # bind mount. The studio already knows which job and candidate
+                # it is asking about, so accept that and resolve the manifest
+                # from disk instead of 404ing on a route that works fine.
+                job = JOBS.get(str(body.get("job_id") or ""))
+                candidate_file = str(body.get("candidate_file") or "") or None
+                if not job or not candidate_file:
+                    self.json_response(404, {"error": "no such validation"})
+                    return
+            candidate_stem = Path(candidate_file).stem
+            manifest_path = Path(job["dir"]) / f"{candidate_stem}.manifest.json" if job else None
+            if not manifest_path or not manifest_path.is_file():
+                self.json_response(404, {"error": f"manifest not found for {candidate_stem}"})
+                return
+            try:
+                self.json_response(200, run_jev(manifest_path))
+            except JevUnavailable as exc:
+                # 503 with the reason: the add-on is not configured here. A 404
+                # would read as "this runner has no such route", which is what
+                # sent the operator hunting for a wiring bug that was not there.
+                self.json_response(503, {"error": str(exc)})
             return
         self.json_response(404, {"error": "unknown route"})
 
