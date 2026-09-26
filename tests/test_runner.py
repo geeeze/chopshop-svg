@@ -20,6 +20,42 @@ def test_host_upload_path_maps_into_container_mount(tmp_path):
     ) == "/data/uploads/upload_abc.png"
 
 
+# --------------------------------------------------------------- /health host
+
+def test_health_host_comes_from_the_environment(monkeypatch):
+    """The /health host label must be configuration, not a literal.
+
+    This repo is PUBLIC, so a hardcoded machine name in a tracked file is
+    published to the world. The response only needs a label for the studio's
+    runner dropdown, which CHOPSHOP_RUNNER_LABEL supplies.
+    """
+    monkeypatch.setenv("CHOPSHOP_RUNNER_LABEL", "some-deployment")
+    assert runner.health_payload()["host"] == "some-deployment"
+
+
+def test_health_host_falls_back_to_the_machine_name(monkeypatch):
+    """No label configured: report the host, never an empty or stale string."""
+    import socket
+
+    monkeypatch.delenv("CHOPSHOP_RUNNER_LABEL", raising=False)
+    assert runner.health_payload()["host"] == socket.gethostname()
+
+
+def test_no_machine_name_is_hardcoded_in_the_response(monkeypatch):
+    """Guard the leak itself: a real hostname must never reach the wire.
+
+    Catches the regression where the field was a literal, which looked fine
+    locally and published the host name to anyone reading the repo.
+    """
+    monkeypatch.setenv("CHOPSHOP_RUNNER_LABEL", "sentinel-label")
+    payload = runner.health_payload()
+    assert payload["host"] == "sentinel-label"
+    # The module source must not carry a hostname either.
+    source = MODULE_PATH.read_text()
+    assert "geenet" not in source
+
+
+
 def test_oversized_input_is_downscaled_into_job_directory(tmp_path):
     from PIL import Image
 
