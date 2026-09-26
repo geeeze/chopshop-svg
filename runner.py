@@ -121,8 +121,11 @@ def artifact_path(root: Path, *, stem: str, name: str, job_dir: Path) -> Path | 
         return local
     # Source raster: Rails requests ``source.png``, but the original upload keeps
     # its own name/extension under ``input/``. Serve it when no canonical source
-    # file exists at the job root (older jobs predate one).
-    if name.startswith("source."):
+    # file exists at the job root (older jobs predate one). NOTE: this fallback
+    # is for the PLAIN source only — ``source.inverse.png`` must never resolve to
+    # the un-inverted upload, or the inverse tile shows the source as its own
+    # "twin". An absent inverse twin should 404 so the studio tile self-hides.
+    if name == "source.png":
         input_dir = job_dir / "input"
         if input_dir.is_dir():
             for candidate in sorted(p for p in input_dir.iterdir() if p.is_file()):
