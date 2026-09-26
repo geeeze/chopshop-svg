@@ -431,7 +431,6 @@ def _sweep(prepped_png, spec, sweep, out_dir, workers=None):
     # The cap was already resolved from print.sweep / print.sweep_max_candidates
     # when the sweep config was merged above -- one place, so the two spellings
     # cannot disagree about which one wins.
-    raw_print = spec.get("print") or {}
     max_candidates = sweep.get("max_candidates", 12)
     # Round-robin across (speckle, variant) groups before truncating, so a
     # small cap still samples every speckle value AND every pitch-shift

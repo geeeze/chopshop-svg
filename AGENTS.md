@@ -155,7 +155,7 @@ docker compose run --rm chopshop ./front_pipeline.sh 00_source/art.png # front h
 .venv/bin/pyflakes scripts/*.py validate_svg.py preflight.py  # lint
 ```
 
-The suite currently passes (363 tests). If you change the front half, add or
+The suite currently passes (369 tests). If you change the front half, add or
 update the matching test in `tests/` — especially any change to tracing,
 comparison, or prep behaviour.
 
@@ -193,3 +193,17 @@ comparison, or prep behaviour.
   under `print`: `assume_opaque_bg`, `prep_colors`, `background_hex`,
   `sweep_max_candidates`, `invert`).
 - `requirements.txt` — required + optional deps, with install notes.
+
+## Agent skills
+
+### Issue tracker
+
+Issues for this repo live as GitHub issues; use the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles, each label string equal to its name. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
