@@ -99,7 +99,7 @@ a hard finding**; advisories are reported and do not fail the run.
 | 1. Raster prep (background removal, upscaling) | `prep_raster.py` + `rembg`/Real-ESRGAN (optional) | **built** — front half, check-first |
 | 2. Vectorisation (tracing) | `trace_sweep.py` (VTracer) | **built** — front half |
 | 3. Cleanup & colour snapping | `snap_colors.py`, SVGO config | **built** (SVGO needs Node — unused here) |
-| 4. Source validation (Layer A) | `validate_svg.py` | **built, 90 tests** |
+| 4. Source validation (Layer A) | `validate_svg.py` | **built, 91 tests** |
 | 4b. Render preflight (Layer B) | `preflight.py` | **built, 52 tests** |
 | 5. Creative review | you / the printer | **manual** |
 | 6. Export & handoff | `pipeline.sh` | **built** |
@@ -267,7 +267,7 @@ against 0.00–0.20% for every flat file in the batch.
 
 ## Current state — what's verified
 
-**363 tests, all passing** (`pytest tests/`), lint clean. The back half:
+**369 tests, all passing** (`pytest tests/`), lint clean. The back half:
 
 | suite | tests | covers |
 |---|---|---|
@@ -382,7 +382,7 @@ SPEC=other.json ./pipeline.sh x.svg            # different spec
 
 # the batch
 .venv/bin/python scripts/run_batch.py          # → 04_validated/batch_results.json
-.venv/bin/python -m pytest tests/ -q           # 342 tests
+.venv/bin/python -m pytest tests/ -q           # 369 tests
 
 # open the artwork by hand
 inkscape 00_source/art.svg
@@ -425,7 +425,7 @@ scripts/run_batch.py       batch runner
 scripts/prep_raster.py     front half — raster prep (check-first)
 scripts/trace_sweep.py     front half — VTracer candidate sweep
 scripts/compare_candidates.py  front half — Layer A/B + fidelity report
-tests/                     363 tests
+tests/                     369 tests
 00_source/                 input artwork (+ the test batch)
 01_prepped/ 02_traced/ 03_cleaned/   stages 1–3 (front half writes 01/02)
 04_validated/              Layer A output + batch_results.json + comparison reports
