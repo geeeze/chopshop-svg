@@ -159,79 +159,49 @@ See the next section. It is the only input that cannot be read from the file.
 
 ---
 
-## Read this first if the shirts aren't white
+## The garment: white is not always "no ink"
 
 **The tool assumes white fabric unless told otherwise.** This is the single
-setting most likely to cost money.
+setting most likely to cost money, and the only input it cannot read from the
+file.
 
-No ink is no ink only when the fabric is already white. On a **dark** garment,
-white is usually the **first** ink down — the underbase, printed beneath
-everything else so the other colours have something to sit on.
-
-| garment | white in the design | screens |
-|---|---|---|
-| white / light fabric | `#ffffff` fill | **not counted** — it is the garment |
-| black / dark fabric | `#ffffff` fill | **counted** — it is the underbase |
-
-For one test file that is the difference between **4 screens and 5**. On a
-six-colour budget, that is the difference between passing and rejected.
-
-Set it per job:
+The garment decides whether white counts as an ink at all. On a dark shirt white
+is usually laid down first as an **underbase**, so the other colours have
+something to sit on — same file, same artwork, one more screen:
 
 ```json
 "print": { "dark_garment_underbase": true }
 ```
 
-The tool also **warns you when it thinks you've got this wrong**. Whenever white
-is in the artwork but not being counted, it says so and gives both numbers:
-
-```
-  white: paper, not an ink (assumes a light/white garment)
-LOG
-  - white is declared in the artwork but is NOT counted as an ink, which assumes
-    the garment is white — on white fabric that is correct... On a DARK garment
-    white is very often the first ink down, laid as an underbase beneath
-    everything else, so this job would need 5 screens, not 4.
-```
-
-If you don't know the garment yet, that warning is the thing to come back to
-before the job goes to the printer.
+The tool also warns you when it thinks you've got this wrong: whenever white is
+in the artwork but is not being counted, it says so and gives both numbers. The
+screen-count table, the exact warning text, and what the setting implies for the
+ink-coverage figure are in `HOWTO-print-check.md`.
 
 ---
 
 ## What you get back
 
-Every run writes four things:
-
-| File | What it's for |
-|---|---|
-| `05_final/<name>.proof.png` | What the artwork actually looks like at print resolution. Send this to the client. |
-| `05_final/<name>.print.pdf` | The PDF for the printer. |
-| `05_final/<name>.manifest.json` | Everything both gates found, with severities and the tool versions. The record. |
-| `04_validated/<name>.layer_a.txt` | The source-level result on its own. |
-
-Per-run copies are kept as well (`05_final/<stamp>.proof.png`, where `<stamp>`
-is a timestamp + a few random bytes), so consecutive runs never overwrite each
-other.
+Every run writes four things — a proof PNG, a print PDF, the JSON manifest
+(everything both gates found, with severities and the tool versions), and the
+Layer A result on its own. Per-run copies are kept, so consecutive runs never
+overwrite each other. The file table and the per-run naming are in
+`HOWTO-print-check.md`.
 
 ---
 
-## Hard gates vs advisories
+## What fails a run, and what doesn't
 
-Not everything reported deserves equal authority. **Only hard gates fail the
-run.** The manifest records which is which.
+Not everything reported deserves equal authority. **Only the hard gates fail
+the run**; everything else is reported and recorded in the manifest without
+failing it. In short, hard gates are the mechanical reasons a printer rejects a
+file (raster embeds, too many inks, hairlines, open paths on a cutting job, the
+wrong physical size, continuous tone on a spot-colour job), and advisories are
+limits that cannot be enforced deterministically (RGB-derived ink coverage,
+non-embedded fonts, palette drift, node counts).
 
-**Hard — the file cannot be printed as specified:**
-raster embeds when disallowed · too many screens (declared *or* rendered) ·
-strokes below the minimum · open paths on a cutting job · zero-area shapes ·
-malformed SVG · placed images below the resolution floor · CMYK demanded but
-absent · wrong physical size · continuous tone on a spot-colour job.
-
-**Advisory — reported, does not fail:**
-RGB-derived ink coverage (it cannot be trusted as a limit — see limitations) ·
-non-embedded fonts (set `require_embedded_fonts: true` to make it a gate) ·
-paths with more nodes than the limit · colours outside the palette · continuous
-tone when `gradient_handling` is `embedded_raster`.
+The authoritative lists — every rule, its severity, and the setting that changes
+it — are in `HOWTO-print-check.md`.
 
 ---
 
@@ -319,33 +289,18 @@ lxml 6.1.3 · Pillow 12.3.0 · numpy 2.5.3 · Python 3.13.5.
 
 ## Honest limitations
 
-These are real. They affect when you can trust a number.
-
-**Ink coverage is only exact if the file is genuinely CMYK.** Your SVG is RGB.
-Ghostscript converts it for the check but applies no press-grade black
-generation: measured, a **50% grey comes out at 145% ink** instead of ~50%, and
-**nothing exceeds ~296%**, so a 300% limit can never fire on an RGB input. The
-report says `ESTIMATE` and prints a note. For an exact reading, get the printer's
-profile, convert once, and re-run on the PDF — then it is exact and becomes a
-hard gate. On a dark garment that coverage figure is also a **lower bound**,
-because a CMYK separation on paper cannot represent a white laydown under the
-whole design.
-
-**Colour similarity is judged by rough RGB distance.** Good enough to separate
-deliberate ink choices from rendering noise. Not a colour-managed proof.
-
-**Overlapping transparent shapes and overprint effects** produce blended colours
-counted as screens. If the design leans on those, ask the printer.
-
-**Stage 3's SVGO half cannot run here** — SVGO needs Node.js, which this machine
-does not have. The config (`scripts/svgo_print.yml`) is correct and ready for a
-machine that has it; `scripts/snap_colors.py` covers the colour half in pure
-Python.
-
 **It doesn't replace a printed proof.** It catches the mechanical reasons files
 get rejected. It can't tell you a colour looks wrong on the chosen stock, and it
 can't tell you whether the job is *economically* right — process vs spot, ink
 charges, stock choice. That's a conversation with the printer.
+
+Three measurement limits decide when you can trust a number. **Ink coverage is
+only exact on a genuinely CMYK file** — an RGB input can never fire a 300% limit,
+so the report says `ESTIMATE` (and on a dark garment the figure is a lower bound).
+**Colour similarity is a rough RGB distance**, not a colour-managed proof.
+**Overlapping transparent shapes and overprint effects** blend into colours the
+count reports as inks. The measured figures, the verified CMYK readings, and the
+ways around each are in `HOWTO-print-check.md`.
 
 ---
 
