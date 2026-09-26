@@ -156,7 +156,7 @@ Presets: `baseline` `flat` `flat4` `coarse` `nodewise` `nodewise_coarse`
 --color-precision --layer-difference` (comma lists), `--max-cells`,
 `--no-fidelity`, `--with-node-reduce`, `--contact-sheet`.
 
-Measured on this repo's `01_prepped/00-example.prepped.png` (1024x1024, 245 608
+Measured on this repo's `01_prepped/00-example-tonal-reference.prepped.png` (1024x1024, 245 608
 source colours) — the two node levers are ORTHOGONAL and neither alone works:
 
 - `layer_difference` moves path/colour COUNT (4->64: paths 18 053->2 863) and
@@ -325,6 +325,64 @@ in-place mode reported 0.000% changed — from the exact check meant to catch
 geometry damage. When a measurement comes back perfect, suspect the
 measurement: confirm the two inputs are genuinely different files. Always keep a
 pre-reduction copy when verifying in place.
+
+### A 6-colour gate cannot be satisfied by tonal art — pick a flat source
+
+Before tracing anything, check the source: count distinct colours and ask how
+many colours cover ~95% of pixels. A screen print has a hard colour ceiling, so
+tonal source is dead on arrival — not a tuning problem.
+
+The tell: the example this repo shipped was an engraved floral with **245 608
+distinct colours**, where even 256 colours covered only **34%** of pixels. Every
+candidate that "passed" the gates did so by discarding the artwork down to **1
+declared colour** (a black silhouette, `mae_art` 114). It passed and demonstrated
+nothing, which is worse than failing visibly.
+
+A source that passes cleanly: flat, hard-edged fills, ≤6 colours drawn from
+`spec.json`'s own palette, no gradients. That traces at `mae_art` 0.005 with
+zero hard gates and zero advisories.
+
+**Two traps that cost a full rebuild each** (both measured, not guessed):
+
+- **Pure `#000000` alone trips INK_COVERAGE.** Layer B separates to CMYK, and a
+  solid black comes out near 400% coverage by itself — over the 300% limit. The
+  identical design with a black ring reported 300% and 3.4% of the sheet over;
+  swap the black for blue and the advisory vanished. Use a saturated hue for key
+  lines and registration marks.
+- **Overlapping plates also trip it**, because coverage is summed per pixel.
+  Separate the shapes; don't stack them.
+
+When a "passing" candidate has `mae_art` > 50, suspect it passed by deleting the
+artwork rather than by tracing it well. Check `declared_colors` and
+`colormode` before believing a pass.
+
+### Repo visibility is not uniform: chopshop-svg is PUBLIC
+
+Checked via the GitHub API, not assumed:
+
+| repo | visibility |
+|---|---|
+| `chopshop-svg` | **public** |
+| `chopshop-studio`, `chopshop-jev`, `chopshop-sui`, `console` | private |
+
+So anything committed to `chopshop-svg` is world-readable, including its
+`skills/` directory. Consequences, all learned the hard way:
+
+- No hostnames, hostnames-derived labels, private addresses, VPN/tailnet
+  names, or machine nicknames in tracked files — including as code defaults.
+  A hardcoded host in `runner.py` or `app/models/job.rb` is a publication, not
+  a convenience. Use env vars (`CHOPSHOP_RUNNER_<LABEL>_URL`,
+  `CHOPSHOP_EXTRA_HOSTS`, `CHOPSHOP_RUNNER_LABEL`, `RUNNER_BIND`).
+- Never hand-copy a working skill into the public repo. `sync-skills` in the
+  repo root strips sections whose backing code is absent here (the SwarmUI /
+  ComfyUI layer lives in the PRIVATE `chopshop-sui`) and redacts literals.
+  The repo copy is downstream; never import it back over the working skill.
+- Generated files (`db/schema.rb`) are not an editing target: the change is
+  reverted to nothing rather than to a replacement, because the next
+  `db:schema:dump` overwrites it anyway.
+
+Check visibility before publishing, not after: `curl -s -H "Authorization:
+token $TOK" https://api.github.com/repos/geeeze/<repo> | jq .visibility`.
 
 ## Colour reduction to <20 colours
 

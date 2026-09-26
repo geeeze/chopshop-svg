@@ -144,7 +144,9 @@ compare against the input and reject a step that regresses `path_nodes_max`.
 
 VTracer's pip API exposes four curve-fitting parameters the repo's `PRESETS`
 never set: `corner_threshold`, `length_threshold`, `max_iterations`,
-`splice_threshold`. Retracing `00_source/00-example.png`:
+`splice_threshold`. Retracing `00_source/00-example-tonal-reference.png`
+(the table below was measured on the tonal example, which is the hard case --
+the shipped `00-example.png` traces to ~200 nodes and never reaches the gate):
 
 | config | max nodes | total | bytes | secs |
 |---|---|---|---|---|
@@ -385,8 +387,8 @@ remediation plan. It becomes loopable with a bounded, targeted remedy.
 Everything above was measured with the repo's own gate and a real Inkscape
 render. The harnesses (shared-boundary probe, threshold sweep, print test,
 deterministic compare) are in the session scratch directory; the measurements
-are reproducible from `02_traced/00-example/` and
-`00_source/00-example.png` without any network access.
+are reproducible from `02_traced/00-example-tonal-reference/` and
+`00_source/00-example-tonal-reference.png` without any network access.
 
 ---
 
@@ -394,7 +396,8 @@ are reproducible from `02_traced/00-example/` and
 
 `node_reduce.py` now exists, and `tune_sweep.py` exists to sweep settings
 against each other. Re-measuring the parameter space on this repo's own
-`01_prepped/00-example.prepped.png` (1024x1024, 245 608 source colours) changed
+`01_prepped/00-example-tonal-reference.prepped.png` (1024x1024, 245 608 source
+colours) changed
 several conclusions above.
 
 ## 1. The two node levers are ORTHOGONAL, and neither alone is enough
