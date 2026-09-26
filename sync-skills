@@ -2,17 +2,17 @@
 """sync-skills — refresh the in-repo `skills/` copies from the on-disk Hermes
 skills, WITHOUT publishing private-stack detail.
 
-WHY THIS IS NOT JUST A COPY
-    ~/Documents/GitHub/chopshop-svg is a PUBLIC repo; `skills/` in it is
-    world-readable. The on-disk skills are the author's private working copies
-    and have grown sections that describe the private stack — the SwarmUI /
-    ComfyUI generation layer, whose scripts (`scripts/swarm_bridge.py`,
-    `scripts/SWARMUI_PLAN.md`) do not exist in this repo at all and live in the
-    PRIVATE chopshop-sui. skills/README.md already says as much: those layers
-    "encode a specific generation stack and local install paths rather than
-    anything about the pipeline itself".
+TWO KINDS OF SKILL LIVE IN skills/
+    REPO-OWNED   The default. Maintained in this repo by hand, with no on-disk
+                 source. Reported and skipped; never looked for on disk.
+    GENERATED    Listed in GENERATED below. Its SKILL.md is copied from the
+                 matching on-disk Hermes skill, sanitised for a PUBLIC repo.
 
-    So the two directions need different treatment:
+WHY GENERATED COPIES ARE NOT JUST A COPY
+    ~/chopshop-svg is a PUBLIC repo; `skills/` in it is world-readable. The
+    on-disk skills are the author's private working copies and have grown
+    sections that describe the private stack. So the two directions need
+    different treatment:
 
       disk -> repo   SANITISED. Sections whose backing code is absent from this
                      repo are replaced with a pointer to the private repo, and
@@ -20,14 +20,22 @@ WHY THIS IS NOT JUST A COPY
       repo -> disk   NEVER. The repo copy is downstream; importing it back
                      would silently undo local work.
 
-    Run with --check to report drift without writing, --diff to show it.
+    Add a name to GENERATED only when a matching on-disk skill really exists.
+
+WHY A MISSING SOURCE IS A HARD ERROR
+    This script used to print "NOT FOUND on disk -- skipped" and exit 0. When
+    the on-disk skills were consolidated, both published copies lost their
+    source, the check kept reporting success, and the world-readable copies
+    drifted silently for weeks. A generated skill with no source is now a
+    non-zero exit: a green check must mean the copies really are current.
 
 USAGE
-    ./sync-skills            refresh the repo copies
+    ./sync-skills            refresh the generated copies
     ./sync-skills --check    report only
     ./sync-skills --diff     show what would change
 
-Exit 0 = repo copies in sync. Exit 1 = drift (or drift + --check).
+Exit 0 = every generated copy in sync. Exit 1 = drift, or a generated skill
+with no on-disk source.
 """
 from __future__ import annotations
 
@@ -40,6 +48,15 @@ import sys
 REPO = os.path.dirname(os.path.abspath(__file__))
 SKILLS_DIR = os.path.join(REPO, "skills")
 HERMES_SKILLS = os.path.expanduser("~/.hermes/skills")
+
+# Skills whose SKILL.md is GENERATED from a local Hermes skill (disk -> repo),
+# sanitised for this public repo. Everything else under skills/ is REPO-OWNED:
+# maintained here by hand, with no on-disk source. Keep this list explicit, and
+# add a name only when a matching on-disk skill actually exists — a listed skill
+# with no source is a hard error (exit 1), not a skip.
+GENERATED = (
+    # "chopshop-svg-pipeline",   # example: generate from ~/.hermes/skills/.../<name>/SKILL.md
+)
 
 # Sections dropped from a skill before publishing, mapped to the replacement
 # text. Keyed by the H2 heading that starts the section.
@@ -128,16 +145,29 @@ def main() -> int:
         print("no skills/ directory in %s" % REPO)
         return 1
 
-    names = args.skill or sorted(
+    # Names come from BOTH sources. Walking only the repo dirs would silently
+    # ignore a generated skill whose repo copy was deleted, which is the same
+    # blind spot this script exists to close.
+    repo_names = sorted(
         d for d in os.listdir(SKILLS_DIR)
         if os.path.isdir(os.path.join(SKILLS_DIR, d))
     )
+    names = args.skill or sorted(set(repo_names) | set(GENERATED))
     drift = 0
+    missing = 0
     for name in names:
         repo_path = os.path.join(SKILLS_DIR, name, "SKILL.md")
+        if name not in GENERATED:
+            print("%-26s repo-owned -- maintained here, no disk source" % name)
+            continue
         disk_path = disk_skill_path(name)
         if disk_path is None:
-            print("%-26s NOT FOUND on disk -- skipped" % name)
+            missing += 1
+            print("%-26s HARD ERROR: listed in GENERATED, no SKILL.md on disk"
+                  % name, file=sys.stderr)
+            print("  looked under %s" % HERMES_SKILLS, file=sys.stderr)
+            print("  either restore the on-disk skill, or drop it from GENERATED "
+                  "and maintain the repo copy by hand", file=sys.stderr)
             continue
         with open(disk_path) as fh:
             disk_text = fh.read()
@@ -163,14 +193,18 @@ def main() -> int:
                 n=2)
             sys.stdout.writelines(diff)
         elif not args.check:
+            os.makedirs(os.path.dirname(repo_path), exist_ok=True)
             with open(repo_path, "w") as fh:
                 fh.write(wanted)
             print("%-26s written" % name)
 
+    if missing:
+        print("\n%d generated skill(s) have no on-disk source; nothing was "
+              "published for them." % missing, file=sys.stderr)
     if args.check and drift:
         print("\n%d skill(s) would change; run ./sync-skills to publish"
               % drift)
-    return 1 if drift else 0
+    return 1 if (drift or missing) else 0
 
 
 if __name__ == "__main__":
