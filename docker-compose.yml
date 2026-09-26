@@ -22,8 +22,13 @@ services:
       RUNNER_PORT: "8787"
       RUNNER_BIND: "0.0.0.0"
       RUNNER_ROOT: /data/jobs
-      HOST_UPLOAD_ROOT: /home/unodos/chopshop-studio/storage/uploads
-      CONTAINER_UPLOAD_ROOT: /data/uploads
+      # Host PATHS are configuration, not facts about this machine — this repo
+      # is public, so no box-specific path is written here. The values below are
+      # supplied by the untracked docker-compose.override.yml (see .gitignore);
+      # HOST_UPLOAD_ROOT is the host side the runner maps from when the studio
+      # hands it an upload path, CONTAINER_UPLOAD_ROOT is the mount it maps to.
+      HOST_UPLOAD_ROOT: "${HOST_UPLOAD_ROOT:-}"
+      CONTAINER_UPLOAD_ROOT: "${CONTAINER_UPLOAD_ROOT:-/data/uploads}"
       # Optional Jev (TypeSafe System One) add-on. All four are configuration,
       # not facts about this machine, and all four default to unset: leave them
       # so and POST /validations/:id/jev answers 503 with the reason instead of
@@ -40,7 +45,10 @@ services:
       - "127.0.0.1:8787:8787"
     volumes:
       - ./runner-data/jobs:/data/jobs
-      - /home/unodos/chopshop-studio/storage/uploads:/data/uploads:ro
+      # Studio uploads are mounted read-only at the container path, and the host
+      # side comes from the override: a clone on another host mounts its own
+      # checkout here instead of whatever path this box happens to use.
+      - "${HOST_UPLOAD_DIR:-./storage/uploads}:/data/uploads:ro"
       - ./01_prepped:/app/01_prepped
       - ./02_traced:/app/02_traced
       - ./03_cleaned:/app/03_cleaned
