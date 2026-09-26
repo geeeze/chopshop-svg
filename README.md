@@ -222,12 +222,14 @@ The render-preflight tolerances and the front-half prep/trace defaults.
 | `ramp_min_members` | int | `6` | A merged ink built from ≥ this many colours is treated as a gradient/ramp. |
 | `count_white_as_ink` | bool | `false` | Count pure white as an ink (default excludes it, assuming white substrate). |
 | `dark_garment_underbase` | bool | `false` | Dark-garment underbase: implies `count_white_as_ink` (white = the underbase screen). |
+| `substrate` | hex \| palette name | *unset* | The **fabric** colour: this palette entry is the garment, not a screen, so nothing is laid down for it. Kept transparent by the pitch/inverse stage, excluded from the manifest's `screens` list, and reported as `substrate.is_fabric`. |
+| `substrate_index` | int | *unset* | Index into `palette`, as an alternative to naming the colour. |
 | `require_embedded_fonts` | bool | `false` | Font substitution is advisory unless this is set. |
 | `assume_opaque_bg` | bool | `false` | *Front half* — skip background removal in prep. |
 | `prep_colors` | int \| null | `16` | *Front half* — pngquant colour budget in prep; `null` disables quantisation. |
 | `background_hex` | string | `"#ffffff"` | *Front half* — colour to flatten alpha onto before tracing. |
 | `sweep_max_candidates` | int | `12` | *Front half* — cap on the number of traced candidates. |
-| `invert` | bool \| object | `true` | *Front half* — also write a colour-inverted **twin** of the prepped raster (`<stem>.prepped.inverse.png`), in both check and fix mode. `{"mode": "negative"}` inverts chroma and **preserves alpha** (use it for a transparent matte); the default `photometric` inverts every band and therefore flattens a transparent background to opaque. The twin is a derived artefact and may be absent; its presence is always recorded in the `.prep.json` sidecar under `inverse`. A stale twin from an earlier run is deleted when this is turned off, since the prep dir is globbed. |
+| `invert` | bool \| object | `true` | *Front half* — also write a colour-inverted **twin** of the prepped raster (`<stem>.prepped.inverse.png`), in both check and fix mode. `{"mode": "negative"}` inverts chroma and **preserves alpha** (use it for a transparent matte); the default `photometric` inverts every band and therefore flattens a transparent background to opaque. **Caveat:** this is a blind per-channel flip, so on a substrate-dominated source it turns the fabric into a full-bleed ink flood -- the shipped example went from 0.00% to 91.93% of the sheet over the 300% limit. Prefer the `pitch_shift` stage's `inverse` variant, which identifies the substrate (see `substrate` above) and leaves it transparent instead. The twin is a derived artefact and may be absent; its presence is always recorded in the `.prep.json` sidecar under `inverse`. A stale twin from an earlier run is deleted when this is turned off, since the prep dir is globbed. |
 
 ### Notes
 

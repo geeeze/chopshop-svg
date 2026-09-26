@@ -55,6 +55,20 @@ def make_two_colour_png(path, size=(96, 96)):
     return str(path)
 
 
+def make_substrate_png(path, size=(96, 96)):
+    """Mostly black with a white square: the inverse of make_two_colour_png.
+
+    Used to check that a DECLARED substrate is honoured even when it is not
+    the dominant colour, which is exactly the dark-garment case.
+    """
+    img = Image.new("RGB", size, "#000000")
+    for x in range(16, 64):
+        for y in range(16, 64):
+            img.putpixel((x, y), (255, 255, 255))
+    img.save(path, "PNG")
+    return str(path)
+
+
 def _run(tmp_path, png, spec, sweep=None, workers=None):
     out_dir = tmp_path / "traced"
     argv = [png, spec, "--out-dir", str(out_dir)]
@@ -268,21 +282,78 @@ def test_pitch_shift_traces_all_three_variants(tmp_path):
     assert os.path.exists(os.path.join(variants_dir, "source.pitch.png"))
 
 
-def test_inverse_variant_is_rgb_inverted(tmp_path):
+def test_inverse_variant_inverts_artwork_and_leaves_substrate_clear(tmp_path):
+    """The inverse twin must not turn the background into ink.
+
+    This replaces a test that asserted the opposite -- it pinned
+    "white background -> black" as correct behaviour, which is the bug. On a
+    substrate-dominated source that produced a full-bleed flood: measured on
+    the shipped example, the old inverse came out 92.06% black and preflight
+    read 91.93% of the sheet over the 300% limit, while the original read
+    0.00%. Both still reported PASSED, because INK_COVERAGE only gates on CMYK
+    input.
+
+    The substrate is now identified and left fully transparent, so there is no
+    background ink to miscount at all.
+    """
     png = make_two_colour_png(tmp_path / "art.png")
     spec = make_pitch_spec(tmp_path)
     code, out_dir = _run(tmp_path, png, spec)
     assert code == 0
 
     src = Image.open(png).convert("RGB")
-    inv = Image.open(os.path.join(
-        out_dir, ".variants", "source.inverse.png")).convert("RGB")
+    inv_path = os.path.join(out_dir, ".variants", "source.inverse.png")
+    inv = Image.open(inv_path)
     assert inv.size == src.size
-    # white background -> black, black square -> white
-    assert src.getpixel((0, 0)) == (255, 255, 255)
-    assert inv.getpixel((0, 0)) == (0, 0, 0)
+    # RGBA now: the substrate is carried as transparency, not as a colour.
+    assert inv.mode == "RGBA"
+
+    # Background pixel: transparent in the twin, and NOT black.
+    r, g, b, a = inv.getpixel((0, 0))
+    assert a == 0, "substrate must be transparent, not an ink"
+    assert (r, g, b) != (0, 0, 0), "substrate must not be inverted to black"
+
+    # Artwork pixel: opaque, and inverted from black to light.
+    r, g, b, a = inv.getpixel((32, 32))
+    assert a == 255, "artwork must stay opaque"
     assert src.getpixel((32, 32)) == (0, 0, 0)
-    assert inv.getpixel((32, 32)) == (255, 255, 255)
+    assert (r, g, b) == (255, 255, 255), "artwork must be inverted"
+
+    # The point of the fix: opaque area is the artwork only, not the sheet.
+    import numpy as np
+    alpha = np.asarray(inv.split()[-1])
+    opaque_frac = float((alpha > 0).sum()) / alpha.size
+    assert opaque_frac < 0.5, (
+        "inverse twin is mostly opaque (%.1f%%) -- the background is being "
+        "inked again" % (100 * opaque_frac))
+
+
+def test_inverse_variant_honours_declared_substrate(tmp_path):
+    """A declared print.substrate decides what is the fabric.
+
+    Without one, the most common colour is inferred, which is right for flat
+    artwork. With one, that colour stays clear even if it is not the majority.
+    """
+    png = make_substrate_png(tmp_path / "dark.png")
+    spec = make_pitch_spec(tmp_path)
+    # #FFFFFF is the fabric here, but the image is mostly black.
+    raw = json.loads(open(spec, encoding="utf-8").read())
+    raw["print"]["substrate"] = "#FFFFFF"
+    open(spec, "w", encoding="utf-8").write(json.dumps(raw))
+
+    code, out_dir = _run(tmp_path, png, spec)
+    assert code == 0
+    inv = Image.open(os.path.join(out_dir, ".variants", "source.inverse.png"))
+    # (2, 2) is the black majority -- outside the white square -- so it is
+    # artwork: opaque, and inverted from black to light.
+    r, _g, _b, a = inv.getpixel((2, 2))
+    assert a == 255, "the black field is artwork, not the declared substrate"
+    assert r > 200, "artwork must be inverted"
+    # (48, 48) is inside the white square, which IS the declared substrate,
+    # so it stays clear even though it is a minority colour here.
+    assert inv.getpixel((48, 48))[3] == 0, (
+        "declared substrate must stay transparent even when it is not the "
+        "dominant colour")
 
 
 def test_pitch_variant_uses_only_palette_colours(tmp_path):

@@ -456,7 +456,58 @@ def load_print_options(spec_path, notes, failures):
         notes.append("icc_profile_path %r does not exist; falling back to a "
                      "bundled press profile" % options["icc_profile_path"])
         options["icc_profile_path"] = None
+
+    # --- fabric / substrate -------------------------------------------------
+    # Which declared colour is the garment rather than a screen. Resolved here,
+    # once, so the tracer, the manifest, the proof and Jev all read the same
+    # answer -- and so a typo is reported rather than silently meaning "paper".
+    options["palette"] = [str(c) for c in (raw.get("palette") or [])]
+    options["substrate"] = None
+    explicit_sub = (raw.get("print") or {}).get("substrate")
+    idx_sub = (raw.get("print") or {}).get("substrate_index")
+    try:
+        if explicit_sub:
+            value = str(explicit_sub).strip().upper()
+            if not (value.startswith("#") and _hex_to_rgb(value)):
+                if value not in [p.upper() for p in options["palette"]]:
+                    raise ValueError(
+                        "print.substrate %r is neither a #rrggbb colour nor a "
+                        "member of spec.palette" % explicit_sub)
+            options["substrate"] = value
+        elif idx_sub is not None:
+            idx = int(idx_sub)
+            if not 0 <= idx < len(options["palette"]):
+                raise ValueError(
+                    "print.substrate_index %d is out of range for a %d-colour "
+                    "palette" % (idx, len(options["palette"])))
+            options["substrate"] = options["palette"][idx].upper()
+    except (TypeError, ValueError) as exc:
+        options["substrate"] = None
+        notes.append("SUBSTRATE: %s -- ignoring it, so every declared colour "
+                     "is treated as a screen" % exc)
+
+    if options["substrate"]:
+        notes.append("substrate %s is the fabric: it is not counted as an ink "
+                     "and is excluded from the screen list"
+                     % options["substrate"])
+    elif (raw.get("print") or {}).get("dark_garment_underbase"):
+        notes.append("no print.substrate is declared, so no colour is treated "
+                     "as fabric. On a dark garment name the fabric colour "
+                     "explicitly, or a traced background becomes an ink")
     return options, raw
+
+
+def _hex_to_rgb(value):
+    """'#rrggbb' -> (r, g, b), or None if malformed. Mirrors front_common."""
+    text = (value or "").strip().lstrip("#")
+    if len(text) == 3:
+        text = "".join(ch * 2 for ch in text)
+    if len(text) != 6:
+        return None
+    try:
+        return tuple(int(text[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return None
 
 
 def _has_interior(packed2d, value):
@@ -1513,12 +1564,33 @@ def build_manifest(svg_path, spec_path, findings, notes, stats, options):
     if stats.get("pdf_path"):
         artifacts["print_pdf"] = stats["pdf_path"]
 
+    # The fabric colour travels with the manifest because every downstream
+    # consumer needs it to read the inks: a printer, the studio's proof page,
+    # and Jev all have to know that this one declared colour is the garment and
+    # not a screen. Recording it once here beats each of them re-deriving it
+    # from the spec and possibly disagreeing.
+    substrate = options.get("substrate")
+    palette = [str(c) for c in (options.get("palette") or [])]
+    screens = [c for c in palette if c.upper() != str(substrate).upper()] \
+        if substrate else list(palette)
+
     return {
         "tool": "preflight.py (v4.0 two-layer pipeline)",
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "input": {"file": svg_path, "kind": stats.get("input_kind"),
                   "spec": spec_path},
         "passed": not hard,
+        "substrate": {
+            "colour": substrate,
+            "is_fabric": bool(substrate),
+            "palette": palette,
+            "screens": screens,
+            "note": ("this colour is the garment/substrate and is NOT laid down "
+                     "as ink; it appears in the proof only as the material "
+                     "showing through")
+                    if substrate else
+                    "no substrate declared; every declared colour is a screen",
+        },
         "summary": {
             "hard": len(hard),
             "advisory": len(advisory),

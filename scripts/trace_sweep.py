@@ -176,14 +176,27 @@ def quantize_to_palette(in_png, palette_hexes, out_png):
     return out_png
 
 
-def invert_raster(in_png, out_png):
-    """RGB-invert every pixel (the \"inverse twin\"), tiled for memory safety.
+def invert_raster(in_png, out_png, substrate_hex=None, tolerance=24):
+    """Invert the ARTWORK only, leaving the substrate transparent.
 
-    Inversion is per-channel ``255 - value`` over sRGB.  Used by the
-    ``pitch_shift`` sweep axis so a dark-on-light artwork can be compared
-    against its light-on-dark twin without a second source file.  Tiled the
-    same way as ``quantize_to_palette`` so a 300-dpi graphic cannot exhaust
-    memory.
+    The previous version was a blind per-channel ``255 - value`` over every
+    pixel. That is wrong for anything destined for a substrate: on a source
+    that is 92% white, the inverse came out 92% BLACK, i.e. a full-bleed flood
+    of ink over the whole sheet. Measured on the shipped example through
+    preflight: the original read 194% max total area coverage with 0.00% of
+    the sheet over the limit, the inverted twin read 300% with 91.93% of the
+    sheet over it. Both still reported PASSED, because INK_COVERAGE is only a
+    gate on CMYK input.
+
+    So the substrate is identified, kept fully transparent, and only pixels
+    that differ from it are inverted. A light-on-dark twin then has no
+    background at all, so there is no flood to miscount and the tracer sees
+    artwork on transparency.
+
+    ``substrate_hex`` is the fabric colour. When it is None the substrate is
+    inferred as the single most common colour, which is right for flat
+    artwork and harmless otherwise (the count is only used to pick a colour,
+    never to discard detail).
     """
     import numpy as np
     from PIL import Image
@@ -191,12 +204,31 @@ def invert_raster(in_png, out_png):
     img = Image.open(in_png).convert("RGB")
     width, height = img.size
     out = np.empty((height, width, 3), dtype=np.uint8)
+    alpha = np.zeros((height, width), dtype=np.uint8)
+
+    if substrate_hex:
+        sub = np.array(fc.hex_to_rgb(substrate_hex), dtype=np.int32)
+    else:
+        colours = img.getcolors(maxcolors=1 << 24) or []
+        if not colours:
+            raise ValueError("cannot infer a substrate from an empty image")
+        sub = np.array(max(colours)[1], dtype=np.int32)
+
     tile = 512
     for y0 in range(0, height, tile):
         y1 = min(y0 + tile, height)
-        strip = np.asarray(img.crop((0, y0, width, y1)), dtype=np.uint8)
-        out[y0:y1] = 255 - strip
-    Image.fromarray(out).save(out_png, "PNG")
+        strip = np.asarray(img.crop((0, y0, width, y1)), dtype=np.int32)
+        # Distance to the substrate decides what counts as "not the fabric".
+        # The tolerance absorbs JPEG ringing and antialiased edge pixels, so
+        # the background does not leave a speckled halo of inverted fringe.
+        near_substrate = (np.abs(strip - sub).max(axis=2) <= tolerance)
+        artwork = ~near_substrate
+        out[y0:y1] = np.where(artwork[..., None], 255 - strip, strip)
+        alpha[y0:y1] = np.where(artwork, 255, 0)
+
+    result = Image.fromarray(out, "RGB").convert("RGBA")
+    result.putalpha(Image.fromarray(alpha, "L"))
+    result.save(out_png, "PNG")
     return out_png
 
 
@@ -440,7 +472,10 @@ def _sweep(prepped_png, spec, sweep, out_dir, workers=None):
         os.makedirs(variant_dir, exist_ok=True)
     if "inverse" in needed_variants:
         inv_png = os.path.join(variant_dir, "source.inverse.png")
-        invert_raster(prepped_png, inv_png)
+        # The fabric colour is the substrate: it is not inked, so it is kept
+        # transparent rather than inverted into a flood. See invert_raster.
+        invert_raster(prepped_png, inv_png,
+                      substrate_hex=fc.substrate_hex(spec))
         variant_pngs["inverse"] = inv_png
     if "pitch" in needed_variants:
         pitch_png = os.path.join(variant_dir, "source.pitch.png")
