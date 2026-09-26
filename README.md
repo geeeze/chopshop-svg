@@ -382,8 +382,11 @@ broken.
 
 ## More reading
 
-- `OVERVIEW.md` — the design and the reasoning behind the two-layer gate.
-- `HOWTO-print-check.md` — deeper walkthrough of the print-check concepts.
+- `OVERVIEW.md` — what the project is, why there are two gates, and the design
+  reasoning. Start here.
+- `HOWTO-print-check.md` — running and reading the print check: the garment
+  setting, every rule and its severity, the measurement caveats, and the stage 3
+  helpers.
 - `scripts/TRACE_STAGE.md` — the trace stage in detail (sweep, fidelity metric,
   parallelism).
 - `scripts/NODE_REDUCTION.md` — why no external tool was adopted for
