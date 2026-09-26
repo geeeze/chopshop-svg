@@ -24,6 +24,18 @@ services:
       RUNNER_ROOT: /data/jobs
       HOST_UPLOAD_ROOT: /home/unodos/chopshop-studio/storage/uploads
       CONTAINER_UPLOAD_ROOT: /data/uploads
+      # Optional Jev (TypeSafe System One) add-on. All four are configuration,
+      # not facts about this machine, and all four default to unset: leave them
+      # so and POST /validations/:id/jev answers 503 with the reason instead of
+      # pretending the route does not exist. JEV_ANNOTATOR points at a
+      # chopshop-jev checkout's scripts/jev_annotate.py (mount it — the two
+      # repos stay separate deliverables, so the question set and verdict logic
+      # are never copied into this one). JEV_API_KEY is the operator's own key
+      # and never belongs in a tracked file: this repo is public.
+      JEV_ANNOTATOR: "${JEV_ANNOTATOR:-}"
+      JEV_API_KEY: "${JEV_API_KEY:-}"
+      JEV_ENDPOINT: "${JEV_ENDPOINT:-}"
+      JEV_MODEL: "${JEV_MODEL:-}"
     ports:
       - "127.0.0.1:8787:8787"
     volumes:
