@@ -8,12 +8,12 @@ It answers one question: *will this file print, and how many screens will it
 cost?* Not "does it look right" — that's your eyes — but the mechanical reasons
 printers reject files and re-quote jobs.
 
-> **Scope note:** this document covers the **back half** (the two gates and the
-> reasoning behind them). The project has since grown a **front half** that turns
-> a *raster* into vector candidates before the back half ever runs — see
-> `README.md`, `scripts/FRONT_HALF.md`, and the stage table below. The design
+> **Scope note:** this document covers the **print check** (the two gates and the
+> reasoning behind them). The project has since grown a **trace stage** that turns
+> a *raster* into vector candidates before the print check ever runs — see
+> `README.md`, `scripts/TRACE_STAGE.md`, and the stage table below. The design
 > reasoning here still holds; the "not built" caveats in the stage table were
-> resolved when the front half shipped.
+> resolved when the trace stage shipped.
 
 ```bash
 cd /path/to/chopshop-svg
@@ -96,8 +96,8 @@ a hard finding**; advisories are reported and do not fail the run.
 | Stage | Tool | Status |
 |---|---|---|
 | 0. Print constraints (`spec.json`) | you | **built** |
-| 1. Raster prep (background removal, upscaling) | `prep_raster.py` + `rembg`/Real-ESRGAN (optional) | **built** — front half, check-first |
-| 2. Vectorisation (tracing) | `trace_sweep.py` (VTracer) | **built** — front half |
+| 1. Raster prep (background removal, upscaling) | `prep_raster.py` + `rembg`/Real-ESRGAN (optional) | **built** — trace stage, check-first |
+| 2. Vectorisation (tracing) | `trace_sweep.py` (VTracer) | **built** — trace stage |
 | 3. Cleanup & colour snapping | `snap_colors.py`, SVGO config | **built** (SVGO needs Node — unused here) |
 | 4. Source validation (Layer A) | `validate_svg.py` | **built, 91 tests** |
 | 4b. Render preflight (Layer B) | `preflight.py` | **built, 52 tests** |
@@ -267,7 +267,7 @@ against 0.00–0.20% for every flat file in the batch.
 
 ## Current state — what's verified
 
-**369 tests, all passing** (`pytest tests/`), lint clean. The back half:
+**369 tests, all passing** (`pytest tests/`), lint clean. The print check:
 
 | suite | tests | covers |
 |---|---|---|
@@ -276,9 +276,9 @@ against 0.00–0.20% for every flat file in the batch.
 | `test_snap_colors.py` | 8 | colour snapping incl. CSS cascade writes |
 | `test_validate_svg_negative.py` | 4 | the four headline failure modes, as a standalone contract |
 
-The front half adds its own suites (prep, trace sweep, comparison, pick/loop,
+The trace stage adds its own suites (prep, trace sweep, comparison, pick/loop,
 palette variants, run record, requirements closeout); see
-`scripts/FRONT_HALF.md` and `README.md` for that coverage.
+`scripts/TRACE_STAGE.md` and `README.md` for that coverage.
 
 **Regression guards for the two measurement traps**, with synthetic fixtures so
 they can't silently return:
@@ -422,12 +422,12 @@ OVERVIEW.md                this document
 scripts/snap_colors.py     stage 3 — colour snapping
 scripts/svgo_print.yml     stage 3 — SVGO config (needs Node.js)
 scripts/run_batch.py       batch runner
-scripts/prep_raster.py     front half — raster prep (check-first)
-scripts/trace_sweep.py     front half — VTracer candidate sweep
-scripts/compare_candidates.py  front half — Layer A/B + fidelity report
+scripts/prep_raster.py     trace stage — raster prep (check-first)
+scripts/trace_sweep.py     trace stage — VTracer candidate sweep
+scripts/compare_candidates.py  trace stage — Layer A/B + fidelity report
 tests/                     369 tests
 00_source/                 input artwork (+ the test batch)
-01_prepped/ 02_traced/ 03_cleaned/   stages 1–3 (front half writes 01/02)
+01_prepped/ 02_traced/ 03_cleaned/   stages 1–3 (trace stage writes 01/02)
 04_validated/              Layer A output + batch_results.json + comparison reports
 05_final/                  proof.png, print.pdf, manifest.json
 06_run/                    run-record JSON (archive spine)

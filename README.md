@@ -9,11 +9,11 @@ about (colour count, node weight, stroke thickness, coverage), and shows you the
 trade-offs. **It never picks a winner** — tracing quality is a visual judgment,
 so a human chooses from the candidates and metrics the pipeline lays out.
 
-The project is two halves that you use in sequence:
+The project is two stages that you use in sequence:
 
-1. **Front half** — raster → vector candidates. `front_pipeline.sh` runs prep →
+1. **Trace stage** — raster → vector candidates. `front_pipeline.sh` runs prep →
    trace sweep → comparison. You look at the report, pick a candidate by eye.
-2. **Back half** — vector → print check. `pipeline.sh` runs the chosen candidate
+2. **Print check** — the chosen vector → print-ready. `pipeline.sh` runs it
    through two independent gates (source-level *Layer A*, rendered *Layer B*)
    and produces a proof image, a print PDF, and a JSON manifest.
 
@@ -59,7 +59,7 @@ it.
 
 That's the whole workflow. The `--loop` flag turns step 3–4 semi-interactive:
 after the comparison it prints a menu, you pick up to 3 candidates, and it runs
-the back half on each in turn:
+the print check on each in turn:
 
 ```bash
 ./front_pipeline.sh artwork.png --loop
@@ -123,10 +123,10 @@ Pick what looks right for your job.
 
 | Tool | Needed by | Status |
 |---|---|---|
-| Inkscape | render the SVG to a proof PNG + fidelity diff (back + front half) | **required** |
+| Inkscape | render the SVG to a proof PNG + fidelity diff (print check + trace stage) | **required** |
 | Ghostscript (`gs`) | PDF colour separation in Layer B | **required** |
 | qpdf | PDF inspection in Layer B | **required** |
-| VTracer | raster → vector tracing (front half) | in `requirements.txt` |
+| VTracer | raster → vector tracing (trace stage) | in `requirements.txt` |
 | pngquant | optional colour quantisation in prep | optional — skipped if absent |
 | rembg | optional background removal in prep | optional — skipped if absent |
 | realesrgan-ncnn-vulkan | optional higher-quality upscale in prep | optional — skipped if absent |
@@ -162,7 +162,7 @@ sudo apt-get install pngquant              # Debian/Ubuntu
 Everything optional degrades gracefully: if a tool is missing, that step is
 skipped, a warning is logged, and the skip is recorded in the JSON sidecar —
 the pipeline still produces candidates and metrics. The one hard requirement on
-the front half is a tracer (VTracer, via `requirements.txt`).
+the trace stage is a tracer (VTracer, via `requirements.txt`).
 
 ---
 
@@ -171,7 +171,7 @@ the front half is a tracer (VTracer, via `requirements.txt`).
 The whole pipeline is driven by one JSON file, `spec.json` (start from
 `spec.example.json`). It is the single statement of what "printable" means for
 a job: the colour budget, the geometry limits, the tolerances, and the
-front-half prep/trace behaviour. Every gate in Layer A and Layer B reads from
+trace-stage prep/trace behaviour. Every gate in Layer A and Layer B reads from
 it; any key you omit falls back to its default below.
 
 ### Top-level keys
@@ -180,7 +180,7 @@ it; any key you omit falls back to its default below.
 |---|---|---|---|
 | `print_method` | string | `""` | e.g. `screen_print`, `dtg`, `vinyl`. Drives a few derived defaults (e.g. open-path tolerance). |
 | `max_colors` | int | *(none)* | Colour budget — Layer A hard gate (declared colours must not exceed it). |
-| `palette` | string[] | *(none)* | The expected palette as `#rrggbb`; Layer A checks the artwork's colours against it. Also the front half's palette axis. |
+| `palette` | string[] | *(none)* | The expected palette as `#rrggbb`; Layer A checks the artwork's colours against it. Also the trace stage's palette axis. |
 | `require_cmyk` | bool | `false` | Require genuine CMYK source (a PDF/ICC reading) rather than an RGB-derived estimate. |
 | `icc_profile_path` | string | `null` | ICC profile for colour separation; falls back to a bundled press profile when absent or missing. |
 | `ink_limit_percent` | number | `300` | Total area coverage (TAC) limit, percent. |
@@ -196,7 +196,7 @@ it; any key you omit falls back to its default below.
 | `min_stroke_width_pt` | number | *(none)* | Minimum stroke width; thinner strokes are a hard finding. |
 | `max_nodes_per_path` | int | *(none)* | Node-count limit per path (trace weight / RIP load). |
 | `allow_raster_embed` | bool | `false` | Whether `<image>` raster embeds are permitted (default bans them). |
-| `allow_gradients` | bool | `false` | Whether gradients / continuous tone are allowed. Also gates the front half's `photo` preset. |
+| `allow_gradients` | bool | `false` | Whether gradients / continuous tone are allowed. Also gates the trace stage's `photo` preset. |
 | `allow_open_paths` | bool | `true` | Whether open (unclosed) paths are acceptable. |
 | `gradient_handling` | string | `""` | How gradients are treated: `vector_halftone`, `embedded_raster`, etc. |
 | `halftone_handling` | string | `""` | How halftones are treated. |
@@ -207,11 +207,11 @@ it; any key you omit falls back to its default below.
 |---|---|---|---|
 | `run_preflight` | bool | `true` | Whether `pipeline.sh` runs Layer B (render preflight) at all. |
 | `flag_on_any_failure` | bool | `true` | Any hard finding fails the job. |
-| `auto_retry_limit` | int | `3` | Retry budget (used by the back-half runner). |
+| `auto_retry_limit` | int | `3` | Retry budget (used by the print-check runner). |
 
 ### `print`
 
-The render-preflight tolerances and the front-half prep/trace defaults.
+The render-preflight tolerances and the trace-stage prep/trace defaults.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
@@ -225,11 +225,11 @@ The render-preflight tolerances and the front-half prep/trace defaults.
 | `substrate` | hex \| palette name | *unset* | The **fabric** colour: this palette entry is the garment, not a screen, so nothing is laid down for it. Kept transparent by the pitch/inverse stage, excluded from the manifest's `screens` list, and reported as `substrate.is_fabric`. |
 | `substrate_index` | int | *unset* | Index into `palette`, as an alternative to naming the colour. |
 | `require_embedded_fonts` | bool | `false` | Font substitution is advisory unless this is set. |
-| `assume_opaque_bg` | bool | `false` | *Front half* — skip background removal in prep. |
-| `prep_colors` | int \| null | `16` | *Front half* — pngquant colour budget in prep; `null` disables quantisation. |
-| `background_hex` | string | `"#ffffff"` | *Front half* — colour to flatten alpha onto before tracing. |
-| `sweep_max_candidates` | int | `12` | *Front half* — cap on the number of traced candidates. |
-| `invert` | bool \| object | `true` | *Front half* — also write a colour-inverted **twin** of the prepped raster (`<stem>.prepped.inverse.png`), in both check and fix mode. `{"mode": "negative"}` inverts chroma and **preserves alpha** (use it for a transparent matte); the default `photometric` inverts every band and therefore flattens a transparent background to opaque. **Caveat:** this is a blind per-channel flip, so on a substrate-dominated source it turns the fabric into a full-bleed ink flood -- the shipped example went from 0.00% to 91.93% of the sheet over the 300% limit. Prefer the `pitch_shift` stage's `inverse` variant, which identifies the substrate (see `substrate` above) and leaves it transparent instead. The twin is a derived artefact and may be absent; its presence is always recorded in the `.prep.json` sidecar under `inverse`. A stale twin from an earlier run is deleted when this is turned off, since the prep dir is globbed. |
+| `assume_opaque_bg` | bool | `false` | *Trace stage* — skip background removal in prep. |
+| `prep_colors` | int \| null | `16` | *Trace stage* — pngquant colour budget in prep; `null` disables quantisation. |
+| `background_hex` | string | `"#ffffff"` | *Trace stage* — colour to flatten alpha onto before tracing. |
+| `sweep_max_candidates` | int | `12` | *Trace stage* — cap on the number of traced candidates. |
+| `invert` | bool \| object | `true` | *Trace stage* — also write a colour-inverted **twin** of the prepped raster (`<stem>.prepped.inverse.png`), in both check and fix mode. `{"mode": "negative"}` inverts chroma and **preserves alpha** (use it for a transparent matte); the default `photometric` inverts every band and therefore flattens a transparent background to opaque. **Caveat:** this is a blind per-channel flip, so on a substrate-dominated source it turns the fabric into a full-bleed ink flood -- the shipped example went from 0.00% to 91.93% of the sheet over the 300% limit. Prefer the `pitch_shift` stage's `inverse` variant, which identifies the substrate (see `substrate` above) and leaves it transparent instead. The twin is a derived artefact and may be absent; its presence is always recorded in the `.prep.json` sidecar under `inverse`. A stale twin from an earlier run is deleted when this is turned off, since the prep dir is globbed. |
 
 ### Notes
 
@@ -239,8 +239,8 @@ The render-preflight tolerances and the front-half prep/trace defaults.
 - **`spec.json` is the active contract; `spec.example.json` is the annotated
   starting point.** Copy the example and edit, or merge a fragment over it —
   the loaders merge over defaults, so a minimal spec is fine.
-- The front half owns the four `print.*` keys marked *Front half* above; the
-  rest belong to the back half. See `scripts/FRONT_HALF.md` for the front-half
+- The trace stage owns the four `print.*` keys marked *Trace stage* above; the
+  rest belong to the print check. See `scripts/TRACE_STAGE.md` for the trace-stage
   specifics.
 
 ---
@@ -249,8 +249,8 @@ The render-preflight tolerances and the front-half prep/trace defaults.
 
 ```
 chopshop-svg/
-├── front_pipeline.sh          # FRONT half orchestrator: prep → sweep → compare
-├── pipeline.sh                # BACK half: validate + preflight a chosen SVG
+├── front_pipeline.sh          # TRACE stage orchestrator: prep → sweep → compare
+├── pipeline.sh                # PRINT CHECK: validate + preflight a chosen SVG
 ├── validate_svg.py            # Layer A — source-level SVG checks
 ├── preflight.py               # Layer B — render + colour/ink/coverage checks
 ├── spec.json                  # the active job contract (see spec.example.json)
@@ -264,14 +264,14 @@ chopshop-svg/
 │   ├── snap_colors.py         # snap a trace's colours to a palette
 │   ├── palette_variants.py    # aux: re-colour a finished trace onto named palettes
 │   ├── palettes.json          # palette library for palette_variants.py
-│   ├── run_batch.py           # batch-run the back half over a folder
+│   ├── run_batch.py           # batch-run the print check over a folder
 │   ├── run_record.py          # provenance spine: stitch a run into 06_run/<stem>.run.json
 │   ├── closeout.py            # pass/fail board per candidate vs requirements.json
-│   ├── FRONT_HALF.md          # front-half documentation
+│   ├── TRACE_STAGE.md         # trace-stage documentation
 │   ├── NODE_REDUCTION.md      # node-reduction sourcing research (no tool adopted)
 ├── requirements.json          # requirements matrix (R-NN | requirement | source | check)
 ├── tests/                     # pytest suite (synthetic fixtures only)
-├── 00_source/                 # example raster/SVG batch for the back half
+├── 00_source/                 # example raster/SVG batch for the print check
 └── 01_prepped/ 02_traced/ 04_validated/ 05_final/ 06_run/ 07_palettes/   # generated (gitignored)
 ```
 
@@ -279,7 +279,7 @@ chopshop-svg/
 
 ## Run record + closeout (the archive spine)
 
-`scripts/run_record.py` stitches one front-half run into a single provenance
+`scripts/run_record.py` stitches one trace-stage run into a single provenance
 record, and `scripts/closeout.py` prints the pass/fail board against
 `requirements.json`. Neither runs the pipeline, neither picks a winner.
 
@@ -384,7 +384,7 @@ broken.
 
 - `OVERVIEW.md` — the design and the reasoning behind the two-layer gate.
 - `HOWTO-print-check.md` — deeper walkthrough of the print-check concepts.
-- `scripts/FRONT_HALF.md` — the front half in detail (sweep, fidelity metric,
+- `scripts/TRACE_STAGE.md` — the trace stage in detail (sweep, fidelity metric,
   parallelism).
 - `scripts/NODE_REDUCTION.md` — why no external tool was adopted for
   `geometry_overload`: byte optimizers do not reduce nodes, svg-simplifier

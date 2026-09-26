@@ -1,13 +1,13 @@
-# Front half: raster → traced candidates → comparison
+# Trace stage: raster → traced candidates → comparison
 
-The back half of this pipeline (`validate_svg.py`, `preflight.py`,
+The print check of this pipeline (`validate_svg.py`, `preflight.py`,
 `snap_colors.py`, `pipeline.sh`) takes an **SVG** and checks it for print
-readiness. The front half answers the question that comes *before* that: given
-a **raster** image, which vector traces are worth feeding to the back half?
+readiness. The trace stage answers the question that comes *before* that: given
+a **raster** image, which vector traces are worth feeding to the print check?
 
 It does **not** pick a winner. Whether a trace looks right is a visual judgment.
-The front half produces a set of candidates plus honest metrics, and a human (or
-GPT/Astra) chooses. Then you run the back half on the chosen SVG.
+The trace stage produces a set of candidates plus honest metrics, and a human (or
+GPT/Astra) chooses. Then you run the print check on the chosen SVG.
 
 ```
     raster (PNG/JPG/TIFF)
@@ -30,12 +30,12 @@ GPT/Astra) chooses. Then you run the back half on the chosen SVG.
     (human picks a candidate)
             │
     ┌───────▼────────┐
-    │ ./pipeline.sh  │   the BACK half: validate + preflight the chosen SVG
+    │ ./pipeline.sh  │   the PRINT CHECK: validate + preflight the chosen SVG
     └────────────────┘
 ```
 
 `front_pipeline.sh` chains the first three stages. It **never** calls
-`pipeline.sh`; the two halves stay separate so you always make the choice in
+`pipeline.sh`; the two stages stay separate so you always make the choice in
 between.
 
 **Prep is check-first.** By default `prep_raster.py` (and therefore
@@ -147,7 +147,7 @@ input + the same sweep config produces byte-identical SVGs (verified by
 `tests/test_trace_sweep.py`), and `sweep.json` records the exact parameters,
 the source's sha256, and the tracer's version for each candidate.
 
-## The spec fields the front half owns
+## The spec fields the trace stage owns
 
 All under `print`, all optional:
 
@@ -170,20 +170,20 @@ print size, and it becomes a real gate again — the two layers already honour i
 ```bash
 cd /path/to/chopshop-svg
 
-# one command, front half only (prep checks + copies through unchanged):
+# one command, trace stage only (prep checks + copies through unchanged):
 ./front_pipeline.sh my-artwork.png
 
 # if the prep checks say the image needs it, apply the transforms too:
 ./front_pipeline.sh my-artwork.png --fix
 
 # semi-interactive: after compare, pick up to 3 candidates and run
-# pipeline.sh (the back half) on each, in a loop
+# pipeline.sh (the print check) on each, in a loop
 ./front_pipeline.sh my-artwork.png --loop
 
 # read the report, choose a candidate by eye:
 #   04_validated/my-artwork.comparison.md
 
-# then run the BACK half on the chosen candidate:
+# then run the PRINT CHECK on the chosen candidate:
 ./pipeline.sh 02_traced/my-artwork/candidate_04.svg
 ```
 
@@ -263,7 +263,7 @@ complexity, where tracing (and the Inkscape fidelity render) dominates.
   pixels rather than physical millimetres. With no `dimensions` block in the
   spec (the default), this is harmless — the size gate is skipped. If a job
   does order a size, set `width`/`height`/`viewBox` on the chosen candidate to
-  that physical size before the back half.
+  that physical size before the print check.
 - **The colour trace includes the background.** VTracer's `color` mode traces
   the whole image, so a background shows up as a near-background fill and can
   push the declared/rendered colour count up. The `bw` preset and the

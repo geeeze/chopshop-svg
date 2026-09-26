@@ -18,7 +18,10 @@ For each candidate it records: filename, sweep parameters, Layer A and Layer B
 result (pass/fail + findings), declared colour count, rendered ink count, node
 count (total and per-path max), file size, and a "distance from spec" summary
 (hard gates failed + advisories).  Candidates are sorted by "fewest hard gates
-failed, then fewest advisories" and nothing more.
+failed, then whether the artwork survived the trace, then fewest advisories,
+then lowest artwork MAE" -- the middle term is the exception described above,
+and the table footer states the same ordering.  Do not describe this as a
+gates-only sort: see ``references/passed-is-not-faithful.md``.
 
 When a source raster can be resolved (from sweep.json's ``input.file`` or the
 ``--source`` flag), each candidate is ALSO rendered back to a raster with
