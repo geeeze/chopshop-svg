@@ -161,11 +161,11 @@ comparison, or prep behaviour.
 
 ## Key files
 
-- `skills/` — the two deep-reference skills exported from the author's Hermes
-  install (`shirt-print-front-half` = front half, `svg-print-preflight` = back
-  half). Read them before touching the matching code; they hold the pitfalls
-  and design decisions this file only summarises. `skills/README.md` explains
-  how to re-import them into a Hermes install.
+- `skills/` — the deep-reference skill for this pipeline
+  (`chopshop-svg-pipeline`, hand-maintained here). Read it before touching the
+  matching code; it holds the pitfalls and design decisions this file only
+  summarises. `skills/README.md` explains how to re-import it into a Hermes
+  install, and how `./sync-skills` treats the copy.
 - `scripts/FRONT_HALF.md` — front-half design (sweep, fidelity, parallelism).
 - `scripts/node_reduce.py` — the `geometry_overload` remedy. Targeted by
   default: only paths over `geometry.max_nodes_per_path` are fitted, because
