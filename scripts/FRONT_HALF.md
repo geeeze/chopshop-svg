@@ -118,6 +118,27 @@ hierarchical → preset → palette) so a small cap still samples every preset a
 both hierarchical modes, then truncated to `spec.print.sweep_max_candidates`
 (default 12).
 
+### Pitch shift: the palette as a transform, not a gate
+
+By default the palette is a *testing hurdle*: one `use_palette` candidate is
+pre-quantised to `spec.palette`, and Layer A flags any candidate whose colours
+fall outside it.  Setting `print.pitch_shift: true` flips the palette's role —
+the source is **converted to the palette** instead of being tested against it:
+
+- `source` — the prepped raster traced unchanged;
+- `inverse` — its RGB-inverted twin (light↔dark), traced the same way;
+- `pitch` — the source recoloured onto `spec.palette` (nearest colour in sRGB),
+  so the traced candidate conforms to the palette *by construction*.
+
+Each variant runs through the full parameter sweep, and the `use_palette` axis is
+retired (the `pitch` variant *is* the palette candidate).  Truncation round-robins
+across `(speckle, variant)` so a small cap still samples all three variants.  The
+derived rasters land in `02_traced/<stem>/.variants/`, each candidate's
+`sweep.json` entry records its `variant` and `variant_input`, and
+`compare_candidates.py` diffs each candidate against its **own** variant raster
+for the fidelity metric (an inverse candidate diffed against the original source
+would look wrong on purpose).
+
 VTracer's flags are **not** assumed: the CLI path parses `vtracer --help`, and
 the Python-API path introspects `convert_image_to_svg_py`'s signature. If a
 sweep flag is unavailable in the detected tracer, that axis is skipped and the
@@ -136,6 +157,7 @@ All under `print`, all optional:
 | `prep_colors` | `16` | pngquant colour budget; `null` disables quantisation. |
 | `background_hex` | `"#ffffff"` | Colour to flatten any alpha channel onto before tracing. |
 | `sweep_max_candidates` | `12` | Cap on the number of traced candidates. |
+| `pitch_shift` | `false` | Turn the palette into a *transform* instead of a gate: trace the source as three variants — `source`, `inverse` (RGB-inverted twin), `pitch` (recoloured onto `spec.palette`) — and retire the `use_palette` sweep axis. |
 
 **Size and orientation are not prescribed.** The default `spec.json` carries no
 `dimensions` block, so the Layer A `DIMENSIONS` gate is skipped and prep reports

@@ -27,7 +27,11 @@ Default sweep (overridable with --sweep, capped by spec.print.sweep_max_candidat
     spec.geometry.allow_gradients is false);
   * 3 filter_speckle values -- 2 / 8 / 16;
   * 2 hierarchical modes -- cutout / stacked;
-  * palette: one candidate pre-quantised to spec.palette, one untouched.
+  * palette: one candidate pre-quantised to spec.palette, one untouched;
+  * pitch shift (spec.print.pitch_shift): the palette becomes a transform --
+    the source is traced as three variants (source / inverse / pitch) instead
+    of one palette-quantised candidate buried in the sweep, and the
+    use_palette axis is retired.
 
 Candidates are generated in a documented interleaved order (speckle ->
 hierarchical -> preset -> palette) so that a small cap still samples every
@@ -172,6 +176,30 @@ def quantize_to_palette(in_png, palette_hexes, out_png):
     return out_png
 
 
+def invert_raster(in_png, out_png):
+    """RGB-invert every pixel (the \"inverse twin\"), tiled for memory safety.
+
+    Inversion is per-channel ``255 - value`` over sRGB.  Used by the
+    ``pitch_shift`` sweep axis so a dark-on-light artwork can be compared
+    against its light-on-dark twin without a second source file.  Tiled the
+    same way as ``quantize_to_palette`` so a 300-dpi graphic cannot exhaust
+    memory.
+    """
+    import numpy as np
+    from PIL import Image
+
+    img = Image.open(in_png).convert("RGB")
+    width, height = img.size
+    out = np.empty((height, width, 3), dtype=np.uint8)
+    tile = 512
+    for y0 in range(0, height, tile):
+        y1 = min(y0 + tile, height)
+        strip = np.asarray(img.crop((0, y0, width, y1)), dtype=np.uint8)
+        out[y0:y1] = 255 - strip
+    Image.fromarray(out).save(out_png, "PNG")
+    return out_png
+
+
 # --------------------------------------------------------------------------
 # Candidate generation
 # --------------------------------------------------------------------------
@@ -194,10 +222,32 @@ def build_candidates(sweep, spec, available_flags, backend_desc):
     hierarchicals = list(sweep.get("hierarchical", ["cutout", "stacked"]))
     use_palettes = list(sweep.get("use_palette", [False, True]))
     palette = spec.get("palette") or []
-    if not palette:
-        use_palettes = [False]
 
+    # Pitch shift (spec.print.pitch_shift) turns the palette from a *gate*
+    # into a *transform*: instead of one palette-quantised candidate buried in
+    # the sweep, the source is run as three first-class variants --
+    #   source   the prepped raster unchanged
+    #   inverse  its RGB-inverted twin
+    #   pitch    the source recoloured onto spec.palette (nearest colour)
+    # Each variant is traced across the full parameter sweep.  The `use_palette`
+    # axis is retired in this mode because `pitch` *is* the palette variant.
+    pitch_shift = bool((spec.get("print") or {}).get("pitch_shift"))
     skipped_axes = {}
+    variants = ["source"]
+    if pitch_shift:
+        # The palette axis is retired entirely: pitch *is* the palette
+        # transform, and with no palette there is nothing to quantise onto.
+        use_palettes = [False]
+        variants.append("inverse")
+        if palette:
+            variants.append("pitch")
+        else:
+            skipped_axes["variant:pitch"] = (
+                "pitch_shift is on but spec.palette is empty; the pitch "
+                "variant needs a palette to map onto")
+    else:
+        if not palette:
+            use_palettes = [False]
 
     if "filter_speckle" not in available_flags:
         skipped_axes["filter_speckle"] = ("flag not available in %s; traced "
@@ -227,18 +277,20 @@ def build_candidates(sweep, spec, available_flags, backend_desc):
         for hier in hierarchicals:
             for preset in presets:
                 for use_palette in use_palettes:
-                    params = dict(effective[preset])
-                    if speckle is not None:
-                        params["filter_speckle"] = speckle
-                    if hier is not None:
-                        params["hierarchical"] = hier
-                    full.append({
-                        "preset": preset,
-                        "filter_speckle": speckle,
-                        "hierarchical": hier,
-                        "use_palette": use_palette,
-                        "params": params,
-                    })
+                    for variant in variants:
+                        params = dict(effective[preset])
+                        if speckle is not None:
+                            params["filter_speckle"] = speckle
+                        if hier is not None:
+                            params["hierarchical"] = hier
+                        full.append({
+                            "preset": preset,
+                            "filter_speckle": speckle,
+                            "hierarchical": hier,
+                            "use_palette": use_palette,
+                            "variant": variant,
+                            "params": params,
+                        })
     return full, skipped_axes
 
 
@@ -288,16 +340,23 @@ def _trace_one(task):
         record["error"] = "no tracer available in worker process"
         return record
 
-    work_png = task["in_png"]
+    # The pitch-shift variant axis selects which raster feeds the tracer:
+    # source / inverse / pitch.  The parent pre-generates the derived rasters
+    # (inverse = RGB-inverted, pitch = palette-quantised) once and hands each
+    # task a {variant -> path} map, so no worker re-derives them.
+    variant = task.get("variant", "source")
+    variant_pngs = task.get("variant_pngs") or {}
+    base_png = variant_pngs.get(variant, task["in_png"])
+    work_png = base_png
     if task["use_palette"]:
         try:
-            quantize_to_palette(task["in_png"], task["palette"], task["pal_png"])
+            quantize_to_palette(base_png, task["palette"], task["pal_png"])
             record["palette_quantized_sha256"] = fc.sha256_file(task["pal_png"])
             work_png = task["pal_png"]
         except Exception as exc:  # noqa: BLE001
             record["palette_error"] = str(exc)
             record["use_palette"] = False
-            work_png = task["in_png"]
+            work_png = base_png
     try:
         _trace(backend, work_png, task["out_svg"], task["params"])
         record["output_sha256"] = fc.sha256_file(task["out_svg"])
@@ -328,18 +387,22 @@ def _sweep(prepped_png, spec, sweep, out_dir, workers=None):
     spec_max = raw_print.get("sweep_max_candidates")
     max_candidates = (spec_max if spec_max is not None
                       else sweep.get("max_candidates", 12))
-    # Round-robin across per-speckle groups before truncating, so a small cap
-    # still samples every speckle value.  A plain stride through the nested
-    # list would alias onto the palette axis (the innermost loop): with a
-    # palette and cap 12, all 12 would be speckle=2 and speckle=16 is never
-    # traced.  Within each speckle group we also round-robin across presets
-    # so a cap doesn't drop the photo preset when allow_gradients is on.
+    # Round-robin across (speckle, variant) groups before truncating, so a
+    # small cap still samples every speckle value AND every pitch-shift
+    # variant.  A plain stride through the nested list would alias onto the
+    # innermost axis (variant, or palette when pitch_shift is off): with a cap
+    # of 12, all 12 would be speckle=2 and the higher speckles / other
+    # variants are never traced.  Within each (speckle, variant) group we also
+    # round-robin across presets so a cap doesn't drop the photo preset when
+    # allow_gradients is on.  When pitch_shift is off every candidate carries
+    # variant="source", so grouping by (speckle, variant) reduces to the
+    # original per-speckle grouping and behaviour is unchanged.
     if max_candidates < len(candidates):
-        # First, within each speckle group, round-robin across presets.
-        speckle_groups = {}
+        groups = {}
         for cand in candidates:
-            speckle_groups.setdefault(cand.get("filter_speckle"), []).append(cand)
-        for speckle, group in speckle_groups.items():
+            key = (cand.get("filter_speckle"), cand.get("variant"))
+            groups.setdefault(key, []).append(cand)
+        for key, group in groups.items():
             preset_groups = {}
             for cand in group:
                 preset_groups.setdefault(cand.get("preset"), []).append(cand)
@@ -349,11 +412,11 @@ def _sweep(prepped_png, spec, sweep, out_dir, workers=None):
                     for cand in tup:
                         if cand is not None:
                             pre_interleaved.append(cand)
-                speckle_groups[speckle] = pre_interleaved
-        # Then round-robin across speckle groups.
-        if len(speckle_groups) > 1:
+                groups[key] = pre_interleaved
+        # Then round-robin across (speckle, variant) groups.
+        if len(groups) > 1:
             interleaved = []
-            for tup in zip_longest(*speckle_groups.values()):
+            for tup in zip_longest(*groups.values()):
                 for cand in tup:
                     if cand is not None:
                         interleaved.append(cand)
@@ -364,13 +427,33 @@ def _sweep(prepped_png, spec, sweep, out_dir, workers=None):
         selected = candidates[:max_candidates]
 
     source_sha = fc.sha256_file(prepped_png)
+    variant_dir = os.path.join(out_dir, ".variants")
     palette_dir = os.path.join(out_dir, ".palette")
     os.makedirs(palette_dir, exist_ok=True)
+
+    # Pre-generate the pitch-shift variant rasters once (inverse = RGB-inverted,
+    # pitch = palette-quantised).  Only the variants that survived truncation
+    # are derived, so a cap that drops a variant never pays for it.
+    needed_variants = {c.get("variant", "source") for c in selected}
+    variant_pngs = {"source": prepped_png}
+    if {"inverse", "pitch"} & needed_variants:
+        os.makedirs(variant_dir, exist_ok=True)
+    if "inverse" in needed_variants:
+        inv_png = os.path.join(variant_dir, "source.inverse.png")
+        invert_raster(prepped_png, inv_png)
+        variant_pngs["inverse"] = inv_png
+    if "pitch" in needed_variants:
+        pitch_png = os.path.join(variant_dir, "source.pitch.png")
+        quantize_to_palette(prepped_png, spec.get("palette") or [], pitch_png)
+        variant_pngs["pitch"] = pitch_png
 
     records = []
     print("trace_sweep: backend=%s (version %s), %d candidate(s)"
           % (backend["kind"], backend.get("version") or "unknown",
              len(selected)))
+    if len(variant_pngs) > 1:
+        print("trace_sweep: pitch-shift variants: %s"
+              % ", ".join(sorted(variant_pngs)))
 
     # Build one picklable task per candidate in index order, then trace across
     # worker processes.  Each worker re-detects the tracer (see _trace_one).
@@ -378,6 +461,8 @@ def _sweep(prepped_png, spec, sweep, out_dir, workers=None):
     for idx, cand in enumerate(selected, 1):
         name = "candidate_%02d.svg" % idx
         out_svg = os.path.join(out_dir, name)
+        variant = cand.get("variant", "source")
+        var_png = variant_pngs.get(variant, prepped_png)
         record = {
             "index": idx,
             "file": name,
@@ -385,6 +470,9 @@ def _sweep(prepped_png, spec, sweep, out_dir, workers=None):
             "filter_speckle": cand["filter_speckle"],
             "hierarchical": cand["hierarchical"],
             "use_palette": bool(cand["use_palette"]),
+            "variant": variant,
+            "variant_input": var_png,
+            "variant_sha256": fc.sha256_file(var_png),
             "params": cand["params"],
             "source_sha256": source_sha,
             "palette_quantized_sha256": None,
@@ -392,6 +480,8 @@ def _sweep(prepped_png, spec, sweep, out_dir, workers=None):
         }
         tasks.append({
             "in_png": prepped_png,
+            "variant_pngs": variant_pngs,
+            "variant": variant,
             "out_svg": out_svg,
             "pal_png": os.path.join(palette_dir, "%s.png" % name),
             "palette": spec.get("palette") or [],
@@ -410,9 +500,10 @@ def _sweep(prepped_png, spec, sweep, out_dir, workers=None):
         out_svg = os.path.join(out_dir, record["file"])
         status = record.get("error") or ("%s bytes" % (
             os.path.getsize(out_svg) if os.path.exists(out_svg) else "0"))
-        print("  %s  preset=%-6s speckle=%s hier=%-7s palette=%-5s -> %s"
+        print("  %s  preset=%-6s speckle=%s hier=%-7s variant=%-7s palette=%-5s -> %s"
               % (record["file"], record["preset"], record["filter_speckle"],
-                 record["hierarchical"], bool(record["use_palette"]), status))
+                 record["hierarchical"], record.get("variant", "source"),
+                 bool(record["use_palette"]), status))
 
     sweep_payload = {
         "tool": "trace_sweep.py",

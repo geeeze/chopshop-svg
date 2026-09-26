@@ -39,6 +39,7 @@
     "assume_opaque_bg": false,
     "prep_colors": 16,
     "background_hex": "#ffffff",
-    "sweep_max_candidates": 12
+    "sweep_max_candidates": 12,
+    "pitch_shift": false
   }
 }
