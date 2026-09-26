@@ -78,7 +78,18 @@ def artifact_path(root: Path, *, stem: str, name: str, job_dir: Path) -> Path | 
     if traced.is_file():
         return traced
     final = root / "05_final" / name
-    return final if final.is_file() else None
+    if final.is_file():
+        return final
+    # Source previews live in 01_prepped under their own naming scheme
+    # (<stem>.prepped.png / <stem>.prepped.inverse.png) while the studio asks
+    # for the stable names source.png / source.inverse.png. Resolve them here so
+    # a job whose runner predates _publish_source_previews still serves both.
+    if name in ("source.png", "source.inverse.png") and stem:
+        suffix = ".prepped.png" if name == "source.png" else ".prepped.inverse.png"
+        prepped = root / "01_prepped" / f"{stem}{suffix}"
+        if prepped.is_file():
+            return prepped
+    return None
 
 
 def _append_log(job: dict, line: str) -> None:
@@ -114,6 +125,32 @@ def _copy_front_outputs(job: dict, stem: str) -> list[dict]:
     return candidates
 
 
+def _publish_source_previews(job: dict, stem: str) -> dict:
+    """Publish the prepped source and its colour-inverted twin for the studio.
+
+    The studio's source preview fetches two stable names, `source.png` and
+    `source.inverse.png`. Publishing them here (rather than expecting the
+    caller to know the upload's filename) is what lets the job page show a
+    source/inverse pair without knowing anything about the stem.
+
+    The inverse twin is produced by prep_raster.py when `print.invert` is set,
+    so its absence is NORMAL, not an error: the studio's image tag self-hides
+    on a 404 and the page degrades to the plain source chip. Only the original
+    is required.
+    """
+    job_dir = Path(job["dir"])
+    published = {"source.png": False, "source.inverse.png": False}
+    original = PROJECT / "01_prepped" / f"{stem}.prepped.png"
+    if original.is_file():
+        shutil.copy2(original, job_dir / "source.png")
+        published["source.png"] = True
+    twin = PROJECT / "01_prepped" / f"{stem}.prepped.inverse.png"
+    if twin.is_file():
+        shutil.copy2(twin, job_dir / "source.inverse.png")
+        published["source.inverse.png"] = True
+    return published
+
+
 def run_front(job: dict) -> None:
     with PIPELINE_LOCK:
         job["state"] = "running"
@@ -133,13 +170,19 @@ def run_front(job: dict) -> None:
                            {"SPEC": str(spec_path), "FRONT_PIPELINE_WORKERS": "1"})
         prep = PROJECT / "01_prepped" / f"{stem}.prep.json"
         prep_summary = json.loads(prep.read_text(encoding="utf-8")) if prep.is_file() else None
+        previews = _publish_source_previews(job, stem)
         candidates = _copy_front_outputs(job, stem) if code in (0, 1) else []
         if not candidates:
             raise RuntimeError(f"front pipeline exited {code} without candidates")
+        if previews["source.inverse.png"]:
+            _append_log(job, "source previews: source.png + source.inverse.png")
+        else:
+            _append_log(job, "source previews: source.png (no inverse twin; "
+                             "set spec.print.invert to produce one)")
         with STATE_LOCK:
             job.update(stem=stem, candidates=candidates, comparison=json.loads(
                 (Path(job["dir"]) / "comparison.json").read_text(encoding="utf-8")),
-                prep_summary=prep_summary, state="done")
+                prep_summary=prep_summary, source_previews=previews, state="done")
 
 
 def run_back(validation: dict) -> None:

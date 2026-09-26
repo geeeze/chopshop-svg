@@ -12,6 +12,7 @@ __pycache__/
 05_final/
 06_run/
 07_palettes/
+08_tune/
 .preflight-work/
 00_source/preflight/
 *.proof.png

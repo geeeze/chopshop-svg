@@ -379,6 +379,94 @@ def _run_flatten(img, background_hex):
                                        "background_hex": background_hex}
 
 
+def _invert(img, mode="photometric"):
+    """Return the photometric inverse (or a negative) of an RGB(A) image.
+
+    ``photometric`` maps each channel c -> 255 - c. That is the true colour
+    inverse and is what a "wear a white tee under a black shirt" mock-up needs.
+    ``negative`` inverts only the chroma channels and leaves alpha alone, which
+    matters when the source carries transparency: inverting alpha would turn a
+    transparent background opaque and destroy the matte.
+    """
+    from PIL import ImageOps
+    if mode not in ("photometric", "negative"):
+        raise ValueError("invert mode must be 'photometric' or 'negative'")
+    # Palette images carry transparency in a tRNS index, not an alpha band.
+    # Converting one to RGB drops the matte -- so `negative` must promote P/PA
+    # to RGBA first, or the mode silently does the one thing it promises not to.
+    if mode == "negative" and img.mode in ("P", "PA"):
+        img = img.convert("RGBA")
+    if mode == "negative" and img.mode in ("RGBA", "LA"):
+        # Invert the colour bands, keep alpha untouched. Handle each mode by its
+        # own band count: converting to RGB first would always give 4 bands and
+        # then fail to merge back into a 2-band LA.
+        bands = list(img.split())
+        if img.mode == "RGBA":
+            r, g, b, a = bands
+            r, g, b = ImageOps.invert(Image.merge("RGB", (r, g, b))).split()
+            return Image.merge("RGBA", (r, g, b, a))
+        lum, a = bands                                   # LA
+        lum = ImageOps.invert(lum)
+        return Image.merge("LA", (lum, a))
+    return ImageOps.invert(img.convert("RGB"))
+
+
+def _write_inverse(img, out_dir, stem, spec, invert_mode="photometric"):
+    """Write the inverted-colour twin beside the prepped original.
+
+    Returns a dict describing the twin (or why there was not one). The twin is
+    DERIVED, never a substitute: the original prepped file is still the one the
+    pipeline traces unless a caller explicitly asks for the inverse. It exists
+    so the same artwork can be traced against a light-on-dark reading, which is
+    where VTracer's behaviour differs most -- see the note below.
+
+    Why this is not just a colour swap: a trace's quality on dark-on-light art
+    and light-on-dark art are not the same problem. Speckle filtering keys on
+    local contrast, so a design that reads as clean on white can pick up a halo
+    of spurious regions on black, and vice versa. Producing both twins at prep
+    time means the sweep can compare the two readings instead of guessing.
+    """
+    popt = fc.print_options(spec)
+    setting = popt.get("invert", False)
+    inv_path = os.path.join(out_dir, "%s.prepped.inverse.png" % stem)
+    if not setting:
+        # Idempotency: a twin from an EARLIER run must not survive a run that
+        # did not ask for one. `trace_sweep.py` and `run_record.py` glob
+        # 01_prepped/, so a stale file would be picked up as if it were current.
+        stale = None
+        if os.path.exists(inv_path):
+            try:
+                os.unlink(inv_path)
+                stale = inv_path
+            except OSError as exc:
+                return {"ran": False, "skipped": "spec.print.invert is not set",
+                        "stale_file": inv_path,
+                        "stale_remove_error": str(exc)}
+        out = {"ran": False, "skipped": "spec.print.invert is not set"}
+        if stale:
+            out["stale_file_removed"] = stale
+        return out
+    if isinstance(setting, dict):
+        invert_mode = setting.get("mode", invert_mode)
+    try:
+        twin = _invert(img, invert_mode)
+    except Exception as exc:  # noqa: BLE001 - a bad mode is data, not a crash
+        return {"ran": False, "error": "%s: %s" % (type(exc).__name__, exc)}
+
+    twin.save(inv_path, "PNG")
+    return {
+        "ran": True,
+        "file": inv_path,
+        "sha256": fc.sha256_file(inv_path),
+        "size_bytes": os.path.getsize(inv_path),
+        "size_px": list(twin.size),
+        "mode": invert_mode,
+        "derived_from": "%s.prepped.png" % stem,
+        "note": "colour-inverted twin; the original prepped file is unchanged "
+                "and remains the traced input unless a caller asks otherwise",
+    }
+
+
 def _apply_fixes(img, spec, notes):
     popt = fc.print_options(spec)
     target, _dpi = _target(spec)
@@ -425,6 +513,12 @@ def _prep(input_path, spec, out_dir, fix):
     if ext in VECTOR_EXTS:
         dst = os.path.join(out_dir, os.path.basename(input_path))
         shutil.copy2(input_path, dst)
+        # No raster to invert: there are no pixels to invert. Recorded
+        # explicitly rather than silently omitted, so a consumer asking for the
+        # twin can tell "not produced" from "not requested".
+        inverse = {"ran": False,
+                   "skipped": "input is already vector (%s); nothing to invert"
+                              % ext}
         sidecar = {
             "tool": "prep_raster.py",
             "generated": _now(),
@@ -435,6 +529,7 @@ def _prep(input_path, spec, out_dir, fix):
             "already_vector": True,
             "output": {"file": dst, "sha256": fc.sha256_file(dst),
                        "size_bytes": os.path.getsize(dst)},
+            "inverse": inverse,
             "notes": ["already vector, no prep needed"],
             "versions": {"pillow": fc.package_version("Pillow")},
         }
@@ -478,6 +573,13 @@ def _prep(input_path, spec, out_dir, fix):
         else:
             img.convert("RGB").save(out_path, "PNG")
             unchanged = False
+        # The twin is derived from the file just written, so it always matches
+        # the prepped original in SIZE and GEOMETRY. Note that `photometric`
+        # (the default) inverts every channel and therefore flattens a
+        # transparent background to opaque -- only `negative` preserves alpha.
+        # See `_invert`.
+        with Image.open(out_path) as _src:
+            inverse = _write_inverse(_src, out_dir, stem, spec)
         sidecar = {
             "tool": "prep_raster.py",
             "generated": _now(),
@@ -493,6 +595,7 @@ def _prep(input_path, spec, out_dir, fix):
                        "size_px": list(orig_size),
                        "unchanged": unchanged,
                        "container": "png"},
+            "inverse": inverse,
             "acceptable": acceptable,
             "checks": checks,
             "notes": notes,
@@ -512,12 +615,16 @@ def _prep(input_path, spec, out_dir, fix):
             print("  --fix tools not installed: %s (install them, then re-run "
                   "with --fix)" % ", ".join(missing))
         print("  sidecar: %s" % sidecar_path)
+        if inverse.get("ran"):
+            print("  inverse twin: %s (%s)" % (inverse["file"], inverse["mode"]))
         print("  re-run with --fix to apply the optional transforms")
         return 0
 
     # FIX mode: apply the transforms, aspect-preserving.
     img, steps = _apply_fixes(img, spec, notes)
     img.save(out_path, "PNG")
+    with Image.open(out_path) as _src:
+        inverse = _write_inverse(_src, out_dir, stem, spec)
 
     sidecar = {
         "tool": "prep_raster.py",
@@ -531,6 +638,7 @@ def _prep(input_path, spec, out_dir, fix):
         "output": {"file": out_path, "sha256": fc.sha256_file(out_path),
                    "size_bytes": os.path.getsize(out_path),
                    "size_px": list(img.size)},
+        "inverse": inverse,
         "acceptable": acceptable,
         "checks": checks,
         "steps": steps,
@@ -556,6 +664,8 @@ def _prep(input_path, spec, out_dir, fix):
         else:
             print("  %s: skipped (%s)" % (label, step.get("skipped")))
     print("  sidecar: %s" % sidecar_path)
+    if inverse.get("ran"):
+        print("  inverse twin: %s (%s)" % (inverse["file"], inverse["mode"]))
     return 0
 
 
@@ -574,6 +684,19 @@ def main(argv=None):
                         help="apply the optional transforms (background "
                              "removal, upscale, quantise, flatten); default "
                              "is check-only")
+    parser.add_argument("--invert", dest="invert", action="store_true",
+                        default=None,
+                        help="force the colour-inverted twin on (overrides "
+                             "spec.print.invert)")
+    parser.add_argument("--no-invert", dest="invert", action="store_false",
+                        help="suppress the colour-inverted twin even when "
+                             "spec.print.invert is set")
+    parser.add_argument("--invert-mode", choices=("photometric", "negative"),
+                        default=None,
+                        help="photometric inverts every channel (a true colour "
+                             "inverse); negative leaves alpha alone, which is "
+                             "what a transparent matte needs (default "
+                             "photometric)")
     args = parser.parse_args(argv)
 
     if not os.path.exists(args.spec):
@@ -585,6 +708,28 @@ def main(argv=None):
         print("prep_raster: cannot read spec %s: %s" % (args.spec, exc),
               file=sys.stderr)
         return 2
+
+    if args.invert is not None:
+        # CLI wins over the spec, without mutating the spec file on disk.
+        # `spec["print"]` may be absent, null, or a non-dict in a hand-written
+        # spec, and `setdefault` returns the existing None rather than
+        # replacing it -- which used to die with a TypeError traceback here.
+        # A bad spec is data: normalise it and carry on.
+        if not isinstance(spec.get("print"), dict):
+            spec["print"] = {}
+        if not args.invert:
+            spec["print"]["invert"] = False
+        elif args.invert_mode is not None:
+            spec["print"]["invert"] = {"mode": args.invert_mode}
+        else:
+            # `--invert` alone must NOT clobber a mode the spec already chose.
+            # It used to write the argparse default ("photometric") over a spec
+            # saying {"mode": "negative"}, so a user who chose negative
+            # precisely because their art has a transparent matte silently got
+            # photometric instead -- which flattens that matte.
+            existing = spec["print"].get("invert")
+            if existing is True or existing is None or existing is False:
+                spec["print"]["invert"] = {"mode": "photometric"}
 
     project = os.path.dirname(SCRIPT_DIR)
     out_dir = args.out_dir or os.path.join(project, "01_prepped")
