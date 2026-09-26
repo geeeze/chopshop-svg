@@ -53,8 +53,44 @@ the source raster. Source is auto-resolved from `sweep.json`'s `input.file`
   this is dominated by the background and is misleadingly low.
 - `mae_art` = MAE over ARTWORK pixels only (source pixels deviating >20 from the
   modal colour). THIS is the number that matters for raster→vector accuracy.
-- The report keeps the printability sort (hard, advisory) but adds a separate
-  "By pixel fidelity" ranking (sorted by mae_art). Neither picks a winner.
+- The report keeps a separate "By pixel fidelity" ranking (sorted by mae_art)
+  **and** ranks the main table on a fidelity verdict — see below. A separate
+  accuracy table nobody acts on is not a check.
+
+**"No gate fired" is not "this is the design".** A candidate that discards the
+artwork entirely can pass every gate: on the shipped example all six
+`bw`/binary candidates reported `passed=True`, `hard=0`, `advisory=0`, and
+passed both layers — while their `mae_art` was **104.214** against **0.005**
+for the six colour-preserving ones. Sorted on `(hard, advisory)` alone they
+ranked level with the faithful candidates, so a trace that had thrown the
+whole design away was indistinguishable from one that reproduced it.
+
+`compare_candidates.py` now emits `fidelity_verdict` —
+`faithful` < `drift` < `colour_dropped` < `artwork_lost` — as the second sort
+key, after hard gates and before advisories. Two independent checks, because
+they fail differently:
+
+1. `mae_art > 8.0` (the real gap is ~20 000x, so a cliff, not a curve);
+2. `rendered_ink_colors < declared_colors * 0.5`, which catches a candidate
+   that is pixel-perfect only because the source it was diffed against was
+   itself quantised to one ink.
+
+It is **advisory, never a hard gate** — a deliberately single-colour job is a
+legitimate ask and hard-failing it would reject that. It raises the advisory
+count and adds a `FIDELITY_ARTWORK_LOST` finding so it reaches the UI without
+being prescriptive.
+
+The rank table counts DOWN because the sort is ascending and the best
+candidate must come first. Ranking `artwork_lost` as 0 put the six candidates
+that discarded the design at the TOP of the table — the exact inverse of the
+fix. Assert the tie-break in a test, not the constants.
+
+**Generalise it: a passing gate is evidence about the gate, not about the
+result.** `VALIDATION PASSED` fired on a 92%-black inverse trace (ink coverage
+91.93% over the 300% limit) and on a per-plate trace whose coordinates spanned
+`-240..421` inside a `0 0 1024 1024` viewBox. Both are internally consistent
+and both are wrong. Geometry, emptiness and rendered-ink fraction need their
+own assertions; a structural validator cannot see them.
 
 Measured on a real 1080² dark-art image (1472 unique colours, 92% near-black):
 `bw` = silhouette, mae_art≈49 (bad); `poster` no-palette = mae_art≈9.6 (best);
@@ -172,11 +208,30 @@ Any one-axis-at-a-time sweep misleads; the node route needs a 2-D sweep.
 Confirmed INERT (do not offer these as knobs):
 - `max_iterations` — identical output at 10/20/50.
 - `path_precision` — identical output at 1/2/3/4 (vtracer 0.6.15 ignores it).
+- `color_precision` — **NOT a colour-count control**, despite the name and
+  despite `inspect.signature` showing it accepted and forwarded. Reproduced
+  with the bare `vtracer.convert_image_to_svg_py` API, no pipeline involved:
+  2/3/6/8 all give byte-identical 2 291-fill output with near-black hexes
+  (`#060000`, `#180202`) that exist nowhere in the input. `=1` is worse than
+  inert: a 400-byte SVG, the whole image one rectangle filled `#D1AFAF`, a
+  colour absent from the source. Treat it as a vtracer 0.6.15 bug and stop
+  reaching for it as a palette knob.
 - `corner_threshold` — default 60 is already the floor; 100 and 150 make max
   nodes WORSE (1 528 -> 1 624 -> 1 633).
 
-`color_precision` 2 is a CLIFF: 1 path, 1 fill, whole image collapses. 3 is the
-usable floor (3 127 paths, max 353), not 2.
+**Tracing can PANIC or return NOTHING. Guard every trace.**
+- `corner_threshold=110` and `length_threshold=10.0` abort the process inside
+  `clusters.rs:323` (integer overflow) on a dense plate.
+- `filter_speckle >= 16` does not raise — it returns **0 paths, no
+  exception**. A sweep cell that silently produces nothing reads as "this
+  preset is clean" and will be selected. Assert non-empty output.
+- The panic is content- and density-dependent, not a pixel-count limit: a red
+  plate panicked at 1024px and at every other setting tried, while the same
+  plate at 900px traced fine. Do not conclude "it is only large images".
+- `Image.new("1", ...)` DEFAULTS TO 0 = BLACK. Building a per-colour mask
+  with it inverts the mask: a colour covering 13% of the sheet came out as 87%
+  ink, and the trace then panicked because the ink was the minority region.
+  Fill the plate explicitly.
 
 **Quantising the SOURCE raster does not reduce node count.** Traced over
 pngquant / PIL median / max-coverage / octree sources at 6-48 colours: max
@@ -229,11 +284,33 @@ normal prepped file, in BOTH check and fix mode, recorded as a top-level
 `ran: false` + a reason) so a consumer can tell "not produced" from "not
 requested".
 
-- `photometric` (default): every channel `c -> 255-c`. Exact — verified
+- `negative` (default): inverts chroma, PRESERVES alpha. Handle RGBA, LA and
+  tRNS palette images by band count.
+- `photometric`: every channel `c -> 255-c`. Exact — verified
   `max |a+b-255| == 0`. It inverts EVERY band, so it FLATTENS a transparent
   background to opaque; do not describe it as alpha-preserving.
-- `negative`: inverts chroma, PRESERVES alpha. This is the one a transparent
-  matte needs. Handle RGBA, LA and tRNS palette images by band count.
+
+**The substrate is not part of the artwork — leave it alone.** A blind
+per-channel flip over everything inverts the GARMENT as well as the ink, so a
+92%-white shirt becomes a 92%-black flood: the trace is real, every gate
+passes, and the proof is 91.93% over the ink-coverage limit. Inverting only
+pixels that differ from the substrate (with a tolerance, or antialiased edges
+leave inverted fringe) took the same example to 7.94% opaque and 178% max TAC.
+
+`print.substrate` (a hex, or `substrate_index` into the palette) names the
+fabric colour. Resolution belongs in `load_print_options`, not `preflight()`,
+because the raw spec is only in scope at spec-load time -- and it must be
+propagated from there so the tracer, the manifest and the UI cannot disagree.
+A value that is neither valid hex nor a palette member is a SPEC ERROR, not a
+silent fallback to paper; that silent fallback is how the flood came back
+unnoticed.
+
+The manifest gains a top-level `substrate` block (`colour`, `is_fabric`,
+`screens`) so a consumer can tell fabric from ink without re-deriving it.
+
+The old test asserted the bug (`white background -> black` as correct) and
+pinned it in place. When fixing behaviour, grep the tests for the broken
+expectation first -- it will be there, and it will pass.
 
 The twin is purely ADDITIVE: check mode must leave the prepped file
 byte-identical (test-pinned), because that is the file VTracer consumes.
@@ -373,6 +450,25 @@ So anything committed to `chopshop-svg` is world-readable, including its
   A hardcoded host in `runner.py` or `app/models/job.rb` is a publication, not
   a convenience. Use env vars (`CHOPSHOP_RUNNER_<LABEL>_URL`,
   `CHOPSHOP_EXTRA_HOSTS`, `CHOPSHOP_RUNNER_LABEL`, `RUNNER_BIND`).
+
+**Host-agnostic by construction, not by scrubbing.** The rule is that no
+tracked file encodes a deployment. When a host does leak in, grep the whole
+repo for it, then fix the DEFAULT rather than the instance — the recurring
+shape is a bind address: `ThreadingHTTPServer(("127.0.0.1", PORT), ...)` makes
+the service unreachable from a container while working perfectly on the host
+that ran it. `MOCK_BIND` exists for exactly this, defaulting to loopback and
+overridable, with the reason in a comment so the next reader does not "tidy"
+it back.
+
+The same failure has a non-network form: `mount -v "$PWD:/w"` inside a `sh -c`
+whose `$PWD` did not expand silently mounted NOTHING and the run appeared to
+work. Absolute paths, always.
+
+When a container cannot reach a service, check in this order: is the service
+bound off-loopback, is the hostname resolvable from inside (`--add-host
+host.containers.internal:host-gateway`), and is the env var actually passed to
+the container. A 502 from the app usually means the app has no URL for the
+runner, not that the runner is down.
 - Never hand-copy a working skill into the public repo. `sync-skills` in the
   repo root strips sections whose backing code is absent here (the SwarmUI /
   ComfyUI layer lives in the PRIVATE `chopshop-sui`) and redacts literals.
