@@ -228,6 +228,115 @@ def test_round_robin_truncation_distributes_speckles():
     assert speckles == {2, 8, 16}, "round-robin must include all speckles"
 
 
+def make_pitch_spec(tmp_path, pitch_shift=True, palette=None):
+    spec = {
+        "print_method": "screen_print",
+        "max_colors": 6,
+        "dimensions": {"width_mm": 30, "height_mm": 30},
+        "geometry": {"allow_gradients": False},
+        "palette": palette if palette is not None
+        else ["#000000", "#FFFFFF", "#FF0000"],
+        "print": {"dpi": 100, "sweep_max_candidates": 12,
+                  "pitch_shift": pitch_shift},
+    }
+    path = tmp_path / "spec_pitch.json"
+    path.write_text(json.dumps(spec), encoding="utf-8")
+    return str(path)
+
+
+def test_pitch_shift_traces_all_three_variants(tmp_path):
+    png = make_two_colour_png(tmp_path / "art.png")
+    spec = make_pitch_spec(tmp_path)
+    code, out_dir = _run(tmp_path, png, spec)
+
+    assert code == 0
+    sweep = json.load(open(os.path.join(out_dir, "sweep.json"), encoding="utf-8"))
+    cands = sweep["candidates"]
+    assert {c.get("variant", "source") for c in cands} == {
+        "source", "inverse", "pitch"}
+
+    # the palette axis is retired: every candidate traces its variant raster
+    assert all(c["use_palette"] is False for c in cands)
+
+    # every candidate names its own variant input, and it exists on disk
+    for c in cands:
+        assert c["variant_input"]
+        assert os.path.exists(c["variant_input"])
+
+    variants_dir = os.path.join(out_dir, ".variants")
+    assert os.path.exists(os.path.join(variants_dir, "source.inverse.png"))
+    assert os.path.exists(os.path.join(variants_dir, "source.pitch.png"))
+
+
+def test_inverse_variant_is_rgb_inverted(tmp_path):
+    png = make_two_colour_png(tmp_path / "art.png")
+    spec = make_pitch_spec(tmp_path)
+    code, out_dir = _run(tmp_path, png, spec)
+    assert code == 0
+
+    src = Image.open(png).convert("RGB")
+    inv = Image.open(os.path.join(
+        out_dir, ".variants", "source.inverse.png")).convert("RGB")
+    assert inv.size == src.size
+    # white background -> black, black square -> white
+    assert src.getpixel((0, 0)) == (255, 255, 255)
+    assert inv.getpixel((0, 0)) == (0, 0, 0)
+    assert src.getpixel((32, 32)) == (0, 0, 0)
+    assert inv.getpixel((32, 32)) == (255, 255, 255)
+
+
+def test_pitch_variant_uses_only_palette_colours(tmp_path):
+    png = make_two_colour_png(tmp_path / "art.png")
+    spec = make_pitch_spec(tmp_path)
+    code, out_dir = _run(tmp_path, png, spec)
+    assert code == 0
+
+    import numpy as np
+    pitch = Image.open(os.path.join(
+        out_dir, ".variants", "source.pitch.png")).convert("RGB")
+    arr = np.asarray(pitch).reshape(-1, 3)
+    pal = {(0, 0, 0), (255, 255, 255), (255, 0, 0)}
+    assert set(map(tuple, arr.tolist())) <= pal
+
+
+def test_pitch_shift_without_palette_skips_pitch_variant():
+    sweep = {
+        "version": 1,
+        "presets": ["poster"],
+        "filter_speckle": [8],
+        "hierarchical": ["cutout"],
+        "use_palette": [False, True],
+        "max_candidates": 12,
+    }
+    spec = {
+        "print_method": "screen_print", "max_colors": 6,
+        "geometry": {"allow_gradients": False},
+        "palette": [],
+        "print": {"pitch_shift": True},
+    }
+    available = {"colormode", "mode", "color_precision", "layer_difference",
+                 "filter_speckle", "hierarchical"}
+    candidates, skipped = trace_sweep.build_candidates(
+        sweep, spec, available, "test")
+    assert {c["variant"] for c in candidates} == {"source", "inverse"}
+    # the palette axis is retired even though the sweep asks for it
+    assert all(c["use_palette"] is False for c in candidates)
+    assert "variant:pitch" in skipped
+
+
+def test_pitch_shift_off_keeps_legacy_palette_axis(tmp_path):
+    png = make_two_colour_png(tmp_path / "art.png")
+    spec = make_pitch_spec(tmp_path, pitch_shift=False)
+    code, out_dir = _run(tmp_path, png, spec)
+    assert code == 0
+    sweep = json.load(open(os.path.join(out_dir, "sweep.json"), encoding="utf-8"))
+    pal_flags = {c["use_palette"] for c in sweep["candidates"]}
+    assert pal_flags == {True, False}
+    # no variant churn: every candidate is the plain source
+    assert all(c.get("variant", "source") == "source"
+               for c in sweep["candidates"])
+
+
 def test_parallel_matches_sequential(tmp_path):
     # The same sweep run with one worker and with several must produce
     # byte-identical candidate SVGs and identical sweep records (modulo the
@@ -250,4 +359,5 @@ def test_parallel_matches_sequential(tmp_path):
     p = json.load(open(os.path.join(dir_p, "sweep.json"), encoding="utf-8"))
     s["generated"] = p["generated"] = ""
     assert s == p
+
 
