@@ -12,6 +12,8 @@
         "source": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
         "within10": 0.9985
       },
+      "fidelity_reason": "artwork MAE 0.005",
+      "fidelity_verdict": "faithful",
       "file": "candidate_04.svg",
       "file_size": 16837,
       "hard": 0,
@@ -65,6 +67,8 @@
         "source": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
         "within10": 0.9985
       },
+      "fidelity_reason": "artwork MAE 0.005",
+      "fidelity_verdict": "faithful",
       "file": "candidate_05.svg",
       "file_size": 16837,
       "hard": 0,
@@ -118,6 +122,8 @@
         "source": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
         "within10": 0.9985
       },
+      "fidelity_reason": "artwork MAE 0.005",
+      "fidelity_verdict": "faithful",
       "file": "candidate_06.svg",
       "file_size": 16837,
       "hard": 0,
@@ -171,6 +177,8 @@
         "source": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
         "within10": 0.9985
       },
+      "fidelity_reason": "artwork MAE 0.005",
+      "fidelity_verdict": "faithful",
       "file": "candidate_10.svg",
       "file_size": 16837,
       "hard": 0,
@@ -224,6 +232,8 @@
         "source": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
         "within10": 0.9985
       },
+      "fidelity_reason": "artwork MAE 0.005",
+      "fidelity_verdict": "faithful",
       "file": "candidate_11.svg",
       "file_size": 16837,
       "hard": 0,
@@ -277,6 +287,8 @@
         "source": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
         "within10": 0.9985
       },
+      "fidelity_reason": "artwork MAE 0.005",
+      "fidelity_verdict": "faithful",
       "file": "candidate_12.svg",
       "file_size": 16837,
       "hard": 0,
@@ -320,7 +332,7 @@
       }
     },
     {
-      "advisory": 1,
+      "advisory": 2,
       "declared_colors": 1,
       "fidelity": {
         "mae": 8.467,
@@ -330,6 +342,8 @@
         "source": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
         "within10": 0.9199
       },
+      "fidelity_reason": "artwork MAE 104.2 exceeds 8.0 -- the trace does not reproduce the design; check colormode (binary/bw discards colour)",
+      "fidelity_verdict": "artwork_lost",
       "file": "candidate_01.svg",
       "file_size": 4273,
       "hard": 0,
@@ -340,11 +354,17 @@
         "status": "pass"
       },
       "layer_b": {
-        "advisory": 1,
+        "advisory": 2,
         "findings": [
           {
             "detail": "Total area coverage reaches 300% (limit 300%), and 3.66% of the sheet is over the limit. Ink that heavy will not dry and will set off onto the sheets beneath it. This is a relative warning: the source is not CMYK, so Ghostscript invented the separation. Convert with your printer's profile and re-run on the PDF for an exact reading.",
             "rule": "INK_COVERAGE",
+            "severity": "advisory"
+          },
+          {
+            "detail": "artwork MAE 104.2 exceeds 8.0 -- the trace does not reproduce the design; check colormode (binary/bw discards colour)",
+            "layer": "layer_b",
+            "rule": "FIDELITY_ARTWORK_LOST",
             "severity": "advisory"
           }
         ],
@@ -376,7 +396,7 @@
       }
     },
     {
-      "advisory": 1,
+      "advisory": 2,
       "declared_colors": 1,
       "fidelity": {
         "mae": 8.467,
@@ -386,6 +406,8 @@
         "source": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
         "within10": 0.9199
       },
+      "fidelity_reason": "artwork MAE 104.2 exceeds 8.0 -- the trace does not reproduce the design; check colormode (binary/bw discards colour)",
+      "fidelity_verdict": "artwork_lost",
       "file": "candidate_02.svg",
       "file_size": 4273,
       "hard": 0,
@@ -396,11 +418,17 @@
         "status": "pass"
       },
       "layer_b": {
-        "advisory": 1,
+        "advisory": 2,
         "findings": [
           {
             "detail": "Total area coverage reaches 300% (limit 300%), and 3.66% of the sheet is over the limit. Ink that heavy will not dry and will set off onto the sheets beneath it. This is a relative warning: the source is not CMYK, so Ghostscript invented the separation. Convert with your printer's profile and re-run on the PDF for an exact reading.",
             "rule": "INK_COVERAGE",
+            "severity": "advisory"
+          },
+          {
+            "detail": "artwork MAE 104.2 exceeds 8.0 -- the trace does not reproduce the design; check colormode (binary/bw discards colour)",
+            "layer": "layer_b",
+            "rule": "FIDELITY_ARTWORK_LOST",
             "severity": "advisory"
           }
         ],
@@ -432,7 +460,7 @@
       }
     },
     {
-      "advisory": 1,
+      "advisory": 2,
       "declared_colors": 1,
       "fidelity": {
         "mae": 8.467,
@@ -442,6 +470,8 @@
         "source": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
         "within10": 0.9199
       },
+      "fidelity_reason": "artwork MAE 104.2 exceeds 8.0 -- the trace does not reproduce the design; check colormode (binary/bw discards colour)",
+      "fidelity_verdict": "artwork_lost",
       "file": "candidate_03.svg",
       "file_size": 4273,
       "hard": 0,
@@ -452,11 +482,17 @@
         "status": "pass"
       },
       "layer_b": {
-        "advisory": 1,
+        "advisory": 2,
         "findings": [
           {
             "detail": "Total area coverage reaches 300% (limit 300%), and 3.66% of the sheet is over the limit. Ink that heavy will not dry and will set off onto the sheets beneath it. This is a relative warning: the source is not CMYK, so Ghostscript invented the separation. Convert with your printer's profile and re-run on the PDF for an exact reading.",
             "rule": "INK_COVERAGE",
+            "severity": "advisory"
+          },
+          {
+            "detail": "artwork MAE 104.2 exceeds 8.0 -- the trace does not reproduce the design; check colormode (binary/bw discards colour)",
+            "layer": "layer_b",
+            "rule": "FIDELITY_ARTWORK_LOST",
             "severity": "advisory"
           }
         ],
@@ -488,7 +524,7 @@
       }
     },
     {
-      "advisory": 1,
+      "advisory": 2,
       "declared_colors": 1,
       "fidelity": {
         "mae": 8.467,
@@ -498,6 +534,8 @@
         "source": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
         "within10": 0.9199
       },
+      "fidelity_reason": "artwork MAE 104.2 exceeds 8.0 -- the trace does not reproduce the design; check colormode (binary/bw discards colour)",
+      "fidelity_verdict": "artwork_lost",
       "file": "candidate_07.svg",
       "file_size": 4273,
       "hard": 0,
@@ -508,11 +546,17 @@
         "status": "pass"
       },
       "layer_b": {
-        "advisory": 1,
+        "advisory": 2,
         "findings": [
           {
             "detail": "Total area coverage reaches 300% (limit 300%), and 3.66% of the sheet is over the limit. Ink that heavy will not dry and will set off onto the sheets beneath it. This is a relative warning: the source is not CMYK, so Ghostscript invented the separation. Convert with your printer's profile and re-run on the PDF for an exact reading.",
             "rule": "INK_COVERAGE",
+            "severity": "advisory"
+          },
+          {
+            "detail": "artwork MAE 104.2 exceeds 8.0 -- the trace does not reproduce the design; check colormode (binary/bw discards colour)",
+            "layer": "layer_b",
+            "rule": "FIDELITY_ARTWORK_LOST",
             "severity": "advisory"
           }
         ],
@@ -544,7 +588,7 @@
       }
     },
     {
-      "advisory": 1,
+      "advisory": 2,
       "declared_colors": 1,
       "fidelity": {
         "mae": 8.467,
@@ -554,6 +598,8 @@
         "source": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
         "within10": 0.9199
       },
+      "fidelity_reason": "artwork MAE 104.2 exceeds 8.0 -- the trace does not reproduce the design; check colormode (binary/bw discards colour)",
+      "fidelity_verdict": "artwork_lost",
       "file": "candidate_08.svg",
       "file_size": 4273,
       "hard": 0,
@@ -564,11 +610,17 @@
         "status": "pass"
       },
       "layer_b": {
-        "advisory": 1,
+        "advisory": 2,
         "findings": [
           {
             "detail": "Total area coverage reaches 300% (limit 300%), and 3.66% of the sheet is over the limit. Ink that heavy will not dry and will set off onto the sheets beneath it. This is a relative warning: the source is not CMYK, so Ghostscript invented the separation. Convert with your printer's profile and re-run on the PDF for an exact reading.",
             "rule": "INK_COVERAGE",
+            "severity": "advisory"
+          },
+          {
+            "detail": "artwork MAE 104.2 exceeds 8.0 -- the trace does not reproduce the design; check colormode (binary/bw discards colour)",
+            "layer": "layer_b",
+            "rule": "FIDELITY_ARTWORK_LOST",
             "severity": "advisory"
           }
         ],
@@ -600,7 +652,7 @@
       }
     },
     {
-      "advisory": 1,
+      "advisory": 2,
       "declared_colors": 1,
       "fidelity": {
         "mae": 8.467,
@@ -610,6 +662,8 @@
         "source": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
         "within10": 0.9199
       },
+      "fidelity_reason": "artwork MAE 104.2 exceeds 8.0 -- the trace does not reproduce the design; check colormode (binary/bw discards colour)",
+      "fidelity_verdict": "artwork_lost",
       "file": "candidate_09.svg",
       "file_size": 4273,
       "hard": 0,
@@ -620,11 +674,17 @@
         "status": "pass"
       },
       "layer_b": {
-        "advisory": 1,
+        "advisory": 2,
         "findings": [
           {
             "detail": "Total area coverage reaches 300% (limit 300%), and 3.66% of the sheet is over the limit. Ink that heavy will not dry and will set off onto the sheets beneath it. This is a relative warning: the source is not CMYK, so Ghostscript invented the separation. Convert with your printer's profile and re-run on the PDF for an exact reading.",
             "rule": "INK_COVERAGE",
+            "severity": "advisory"
+          },
+          {
+            "detail": "artwork MAE 104.2 exceeds 8.0 -- the trace does not reproduce the design; check colormode (binary/bw discards colour)",
+            "layer": "layer_b",
+            "rule": "FIDELITY_ARTWORK_LOST",
             "severity": "advisory"
           }
         ],
@@ -657,13 +717,17 @@
     }
   ],
   "common_findings": [],
-  "generated": "2026-09-26T08:03:46+00:00",
+  "fidelity_verdicts": [
+    "artwork_lost",
+    "faithful"
+  ],
+  "generated": "2026-09-26T11:59:28+00:00",
   "layers_available": {
     "a": true,
     "b": true
   },
-  "sort": "fewest hard gates failed, then fewest advisories",
-  "spec": "/home/monop/Documents/GitHub/chopshop-svg/spec.json",
+  "sort": "fewest hard gates failed, then whether the artwork survived (faithful < drift < colour_dropped < artwork_lost), then fewest advisories, then lowest artwork MAE",
+  "spec": "spec.json",
   "tool": "compare_candidates.py",
-  "traced_dir": "/home/monop/Documents/GitHub/chopshop-svg/02_traced/00-example"
+  "traced_dir": "02_traced/00-example"
 }

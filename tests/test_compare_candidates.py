@@ -279,3 +279,90 @@ def test_parallel_matches_sequential(tmp_path):
     p = json.load(open(os.path.join(dir_p, "art.comparison.json"),
                        encoding="utf-8"))
     assert _strip(s) == _strip(p)
+
+
+# ---------------------------------------------------------------------------
+# Fidelity verdicts
+#
+# The reason these exist: on the shipped example, all six bw/binary candidates
+# reported hard=0, advisory=0 and passed both layers while their artwork MAE
+# was 104.2 against 0.005 for the colour-preserving ones. Sorting on gates
+# alone put them level with the faithful candidates. These pin the fix using
+# the numbers measured on that real run.
+# ---------------------------------------------------------------------------
+
+
+def _rec(mae_art, declared, rendered, hard=0, advisory=0):
+    return {
+        "file": "candidate_01.svg",
+        "hard": hard,
+        "advisory": advisory,
+        "declared_colors": declared,
+        "rendered_ink_colors": rendered,
+        "fidelity": {"measured": True, "mae": mae_art, "mae_art": mae_art},
+        "layer_a": {"status": "pass", "hard": 0, "advisory": 0, "findings": []},
+        "layer_b": {"status": "pass", "hard": 0, "advisory": 0, "findings": []},
+    }
+
+
+def test_bw_candidate_is_flagged_as_artwork_lost():
+    # The real binary/bw readings from the shipped example.
+    verdict, reason = compare_candidates._fidelity_verdict(
+        _rec(104.214, 1, 2))
+    assert verdict == "artwork_lost"
+    # The message has to name the cause, or the reader has to guess.
+    assert "colormode" in reason
+
+
+def test_colour_candidate_is_faithful():
+    verdict, _ = compare_candidates._fidelity_verdict(_rec(0.005, 5, 5))
+    assert verdict == "faithful"
+
+
+def test_small_drift_is_distinguished_from_artwork_loss():
+    verdict, _ = compare_candidates._fidelity_verdict(_rec(3.0, 5, 5))
+    assert verdict == "drift"
+
+
+def test_dropped_colours_are_caught_even_at_zero_error():
+    # A candidate can be pixel-perfect AND still have thrown colours away, if
+    # the source it was diffed against was itself quantised to 1 ink. The
+    # declared-vs-rendered comparison is a separate check for that.
+    verdict, reason = compare_candidates._fidelity_verdict(_rec(0.0, 5, 1))
+    assert verdict == "colour_dropped"
+    assert "dropped" in reason
+
+
+def test_unmeasured_fidelity_is_not_judged_artwork_lost():
+    # No render to compare against must not read as a pass OR as a failure.
+    rec = _rec(104.214, 5, 5)
+    rec["fidelity"] = {"measured": False, "mae": None, "mae_art": None}
+    verdict, _ = compare_candidates._fidelity_verdict(rec)
+    assert verdict not in ("artwork_lost", "colour_dropped")
+
+
+def test_artwork_lost_is_advisory_not_a_hard_gate():
+    # A deliberately single-colour job is legitimate, so this must never touch
+    # the hard-gate count -- only raise the advisory count and add a finding.
+    rec = _rec(104.214, 1, 2)
+    verdict, reason = compare_candidates._fidelity_verdict(rec)
+    rec["fidelity_verdict"] = verdict
+    rec["fidelity_reason"] = reason
+    rec["advisory"] = rec.get("advisory", 0) + 1
+    rec["layer_b"]["findings"].append({
+        "rule": "FIDELITY_ARTWORK_LOST", "severity": "advisory",
+        "layer": "layer_b", "detail": reason})
+    rec["layer_b"]["advisory"] = rec["layer_b"].get("advisory", 0) + 1
+    assert rec["hard"] == 0
+    assert rec["advisory"] == 1
+    assert rec["layer_b"]["findings"][0]["rule"] == "FIDELITY_ARTWORK_LOST"
+
+
+def test_faithful_candidates_sort_above_artwork_lost():
+    rank = {"faithful": 0, "drift": 1, "colour_dropped": 2, "artwork_lost": 3}
+    lost = {**_rec(104.214, 1, 2), "fidelity_verdict": "artwork_lost"}
+    good = {**_rec(0.005, 5, 5), "fidelity_verdict": "faithful"}
+    # Both are hard=0/adv=0, which is the exact tie the fix has to break.
+    key = lambda c: (c["hard"], rank.get(c.get("fidelity_verdict"), 2),
+                     c["advisory"], c["fidelity"]["mae_art"])
+    assert sorted([lost, good], key=key)[0] is good
