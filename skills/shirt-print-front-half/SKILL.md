@@ -368,7 +368,7 @@ Checked via the GitHub API, not assumed:
 So anything committed to `chopshop-svg` is world-readable, including its
 `skills/` directory. Consequences, all learned the hard way:
 
-- No hostnames, hostnames-derived labels, private addresses, VPN/tailnet
+- No hostnames, hostnames-derived labels, or private network addresses
   names, or machine nicknames in tracked files — including as code defaults.
   A hardcoded host in `runner.py` or `app/models/job.rb` is a publication, not
   a convenience. Use env vars (`CHOPSHOP_RUNNER_<LABEL>_URL`,
