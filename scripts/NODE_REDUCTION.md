@@ -387,3 +387,154 @@ render. The harnesses (shared-boundary probe, threshold sweep, print test,
 deterministic compare) are in the session scratch directory; the measurements
 are reproducible from `02_traced/00-example/` and
 `00_source/00-example.png` without any network access.
+
+---
+
+# ADDENDUM (measured after the sections above)
+
+`node_reduce.py` now exists, and `tune_sweep.py` exists to sweep settings
+against each other. Re-measuring the parameter space on this repo's own
+`01_prepped/00-example.prepped.png` (1024x1024, 245 608 source colours) changed
+several conclusions above.
+
+## 1. The two node levers are ORTHOGONAL, and neither alone is enough
+
+§2 concluded "retracing cannot get there" from `filter_speckle`,
+`layer_difference` and `mode`. That was measured with `splice_threshold` and
+`length_threshold` left at their defaults. They do bite, and they bite on a
+*different* axis than the parameters §2 swept:
+
+| lever | what it controls | measured range |
+|---|---|---|
+| `layer_difference` | path and colour **COUNT** | 4 -> 64: paths 18 053 -> 2 863, colours 11 658 -> 2 493, max nodes **1 528 throughout** |
+| `splice_threshold` | the **WORST single path** | 45 -> 150: max nodes 798 -> 588, monotone, colours unchanged at 3 326 |
+| `filter_speckle` | path count (again) | 2 -> 64: paths 22 244 -> 84, max nodes 1 528 throughout |
+
+So `layer_difference` cannot fix `geometry_overload` on its own and neither can
+`splice_threshold`. §2's "78% needed, 22% available" was measuring the wrong
+lever.
+
+Combined (`length_threshold` 20 throughout, `hierarchical` cutout):
+
+| config | max nodes | total | fills | MAE_art |
+|---|---|---|---|---|
+| baseline cp6/ld16 | 972 | 102 202 | 3 732 | 20.91 |
+| + splice 150 | **587** | 69 966 | 3 732 | 22.08 |
+| + splice 150, ld 32 | 601 | 59 033 | 2 342 | 22.25 |
+| + splice 150, ld 64 | **763** | 34 710 | 962 | 24.13 |
+
+**`layer_difference` is not monotone on max nodes.** 32 gives 601; 64 gives
+763 — coarser layering, *worse* worst-path. Any bench that sweeps it one axis
+at a time will mislead you. This is the same non-monotonicity §1d found in
+Inkscape's simplify threshold, and it means the tracer-side route needs a
+2-D sweep, not a dial.
+
+## 2. Parameters that do nothing (confirmed, and now refused by the bench)
+
+- `max_iterations` — identical output at 10, 20, 50. *(§2 already found this.)*
+- `path_precision` — **new**: identical output at 1, 2, 3, 4. Not previously
+  documented. It only affects the printed precision of coordinates, and
+  VTracer 0.6.15 evidently ignores it.
+- `corner_threshold` — default 60 is already the floor. Raising it to 100 and
+  150 makes max nodes **worse** (1 528 -> 1 624 -> 1 633). Do not sweep upward.
+
+`tune_sweep.py` reports these as deliberately-unswept axes so nobody
+re-derives them.
+
+## 3. Quantising the SOURCE raster does not reduce node count
+
+A natural idea, and it does not work. Traced the same settings over
+pre-quantised sources (pngquant and PIL median-cut / max-coverage / octree, 6 to
+48 colours):
+
+| source colours | max nodes |
+|---|---|
+| 245 608 (none) | 967 |
+| 16 (PIL median) | 912 |
+| 16 (PIL max-coverage) | 1 064 |
+| 6 (PIL median) | 1 415 |
+
+It moves the colour count and leaves the worst path alone (or worse). It is a
+colour tool, not a node tool. `spec.print.prep_colors` should not be expected
+to help `geometry_overload`.
+
+## 4. `color_precision` has a cliff, and the floor is 3 not 2
+
+`color_precision` 2 produces **1 path, 6 nodes, 1 fill** — the whole image
+collapses to a single colour. 3 is already drastic (3 127 paths, max 353).
+§7's `range: [4, 8]` floor is right in spirit but 3 is usable if you want to see
+the cliff.
+
+## 5. `node_reduce.py` clears the gate on every candidate
+
+Implemented per §5 (target the over-gate paths, escalate tolerance per path,
+reject regressions, verify by render). The prototype's deviation-metric bug from
+§4 is fixed: deviation is now a two-sided nearest-point distance after
+Schneider re-parameterisation.
+
+On the four candidates from the table at the top of this file:
+
+| candidate | max before | max after | paths touched |
+|---|---|---|---|
+| `candidate_11` | 965 | **391** | 2 of 4 716 |
+| `candidate_08` | 2 240 | **461** | 13 of 12 517 |
+| baseline cp6/ld16 | 972 | **391** | 2 of 4 981 |
+| cp6/ld64 | 1 054 | **499** | 4 of 1 646 |
+
+`--verify` on `candidate_11`: **0.005% of pixels changed**, ink lost 0.004%,
+largest background blob **2 px**. On `candidate_08`: 0.256% changed, but a
+largest background blob of **12 px** — the gate clears while the art visibly
+erodes, which is exactly the gap between "clears the gate" and "survived".
+
+> The first drafts of these figures were measured by a build that silently
+> dropped `Z` closures and welded multi-subpath paths, so it understated the
+> cost. Treat any number here as provisional until it has been reproduced with
+> `Z`-count invariance checked on the output.
+
+### Invariants a simplifier must not break
+
+Every one of these produced a success message while damaging the file, and a
+node-count check cannot detect any of them:
+
+- **Closure is preserved exactly.** svgpathtools turns `Z` into a trailing
+  segment running back to the subpath's start, and `Path.closed` is wrong for
+  multi-subpath paths. Detect it geometrically per subpath — and never key on
+  the trailing segment's *type*, because the fitter closes subpaths with a
+  cubic. A subpath fitted to a SINGLE closed segment still carries its `Z`, and
+  a one-segment start==end loop is a collapsed shape, not a degenerate one (that
+  distinction alone accounted for 16 lost closures in `candidate_08`). Never
+  drop a closed subpath's only segment: a lone `Z` is a deletion.
+  Assert `Z`-character count is unchanged on the output.
+- **Subpaths are never welded.** A discontinuity starts a new subpath and needs
+  its own `M`; a welded result is *shorter*, so it passes a "nodes fell" test.
+- **Unsupported segment types are refused, not dropped.** `QuadraticBezier` and
+  `Arc` have no `.d()`, so a `hasattr` fallback yields `""`. A deleted path
+  clears any node gate.
+- **A fit that empties a path is a deletion.** Refuse `nodes 30 -> 0`.
+- **The run is transactional.** Stage every fit; apply only after all pass.
+  Reject if *any* path grew, not just the worst one.
+- **`--verify` must compare two different files.** In-place mode used to render
+  "before" from the path it had just overwritten, reporting a meaningless
+  0.000%. A perfect fidelity report means suspect the measurement first.
+- **Deviation is measured against a chord polyline,** which cuts inside every
+  curve, so it under-reports by ~4% (79.65 reported vs 82.77 true on a
+  pathological loop). The tolerance is a slightly optimistic bound; the
+  render-level `--verify` is the real check.
+
+Compare §5's prototype figures (1.192% ink lost) and §1c's Inkscape default
+(18.116%): the corrected metric is what makes this route viable, because the
+tolerance is no longer being spent against a metric that could not see the
+error.
+
+Time: 3.7 s for a 4 716-path file, touching 2 paths.
+
+## 6. Shared boundaries are still the open risk
+
+§3's finding stands and is not addressed by either route: 36.4% of occupied
+grid cells are covered by more than one path, and nothing here welds them.
+Targeting limits which edges can move; the 2 px gap blob above says the
+*specific* file checked was clean, not that the class of problem is solved.
+`node_reduce.py --verify` reporting `largest_gap_blob_px` is the check that
+would catch it — use it per file, and treat a blob above a few pixels as a
+stop.
+

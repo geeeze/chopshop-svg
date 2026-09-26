@@ -35,6 +35,7 @@
     "ink_merge_tolerance": 20,
     "ramp_min_members": 6,
     "count_white_as_ink": true,
-    "dark_garment_underbase": true
+    "dark_garment_underbase": true,
+    "invert": true
   }
 }
