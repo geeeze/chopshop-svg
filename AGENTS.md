@@ -8,13 +8,13 @@ time when rediscovered.
 
 ## What the project does (one paragraph)
 
-Two halves, used in sequence, deliberately kept separate:
+Two stages, used in sequence, deliberately kept separate:
 
-- **Front half** (`front_pipeline.sh`) — `prep_raster.py` → `trace_sweep.py` →
+- **Trace stage** (`front_pipeline.sh`) — `prep_raster.py` → `trace_sweep.py` →
   `compare_candidates.py`. Turns a raster (PNG/JPG/TIFF) into a set of VTracer
   candidate SVGs plus a comparison report (printability gates **and** a
   pixel-fidelity metric).
-- **Back half** (`pipeline.sh`) — `validate_svg.py` (Layer A, source-level) +
+- **Print check** (`pipeline.sh`) — `validate_svg.py` (Layer A, source-level) +
   `preflight.py` (Layer B, rendered), plus `snap_colors.py`. Validates one
   chosen SVG and emits a proof PNG, print PDF, and JSON manifest.
 
@@ -25,7 +25,7 @@ then fewest advisories," and never judge which trace "looks best."
 
 ## The human decision point (the pipeline pauses here)
 
-The front half ends with candidates + metrics; the back half validates **one**
+The trace stage ends with candidates + metrics; the print check validates **one**
 chosen SVG. Between them sits the only step a machine must not take: **choosing
 which candidate goes to final.** That is a human's visual call.
 
@@ -33,11 +33,11 @@ The pipeline can be driven several ways — interactively from a CLI, operated b
 an agent (Hermes / GPT / Claude / etc.), or wired into an external tool/plugin
 that calls the scripts directly. The rule is identical regardless of driver:
 
-- **After the front half, pause and wait for the human to choose.** Do not run
+- **After the trace stage, pause and wait for the human to choose.** Do not run
   `pipeline.sh` on a candidate, do not "pick the best," do not auto-advance to
-  the back half.
+  the print check.
 - **The only exception is an explicit instruction.** If the operator has already
-  named a candidate (e.g. "run candidate_03", "run the back half on all passing
+  named a candidate (e.g. "run candidate_03", "run the print check on all passing
   traces", "just validate 07 and 08"), that is the human's selection given ahead
   of time — proceed on that instruction alone.
 - When presenting the choice, show the comparison table (sort by fewest hard
@@ -45,15 +45,15 @@ that calls the scripts directly. The rule is identical regardless of driver:
   Never rank by "looks best."
 
 `pick_finish.py` (or `./front_pipeline.sh <raster> --loop`) is the interactive
-menu driver for exactly this step: print the candidate menu, run the back half
+menu driver for exactly this step: print the candidate menu, run the print check
 on each pick, loop for more picks or quit.
 
 ## Hard rules (do not violate)
 
 - **Do NOT modify `validate_svg.py`, `preflight.py`, `snap_colors.py`, or
-  `pipeline.sh`.** They are the working, tested back half. Read them to learn
+  `pipeline.sh`.** They are the working, tested print check. Read them to learn
   the contracts (function signatures, manifest format, gate IDs); change only
-  the front half.
+  the trace stage.
 - **Never use an LLM to generate or edit SVG paths.** Tracing is VTracer (or
   img2svg as a last resort) only. If neither is available, exit with a clear
   message naming both and their install commands — never synthesize paths.
@@ -133,8 +133,8 @@ build context lean).
 
 ```bash
 docker compose build                                   # once
-docker compose run --rm chopshop ./pipeline.sh 00_source/art.svg       # back half
-docker compose run --rm chopshop ./front_pipeline.sh 00_source/art.png # front half
+docker compose run --rm chopshop ./pipeline.sh 00_source/art.svg       # print check
+docker compose run --rm chopshop ./front_pipeline.sh 00_source/art.png # trace stage
 ```
 
 - The code and venv are **baked into the image**; only `00_source/`, `spec.json`,
@@ -155,7 +155,7 @@ docker compose run --rm chopshop ./front_pipeline.sh 00_source/art.png # front h
 .venv/bin/pyflakes scripts/*.py validate_svg.py preflight.py  # lint
 ```
 
-The suite currently passes (369 tests). If you change the front half, add or
+The suite currently passes (369 tests). If you change the trace stage, add or
 update the matching test in `tests/` — especially any change to tracing,
 comparison, or prep behaviour.
 
@@ -166,7 +166,7 @@ comparison, or prep behaviour.
   matching code; it holds the pitfalls and design decisions this file only
   summarises. `skills/README.md` explains how to re-import it into a Hermes
   install, and how `./sync-skills` treats the copy.
-- `scripts/FRONT_HALF.md` — front-half design (sweep, fidelity, parallelism).
+- `scripts/TRACE_STAGE.md` — trace-stage design (sweep, fidelity, parallelism).
 - `scripts/node_reduce.py` — the `geometry_overload` remedy. Targeted by
   default: only paths over `geometry.max_nodes_per_path` are fitted, because
   simplifying a whole file measurably RAISES the worst path. Regression
@@ -185,11 +185,11 @@ comparison, or prep behaviour.
   into no stage): re-colours a finished trace onto the palettes in
   `scripts/palettes.json`, leaving the geometry untouched (only
   `fill`/`stroke`/`stop-color` change). Runs standalone, from a `05_final/`
-  manifest (`--from-final`), and can gate each variant through the back half
+  manifest (`--from-final`), and can gate each variant through the print check
   (`--preflight`). An explicit `map` always beats its area/nearest heuristic --
   the heuristic cannot recover intent. Never picks a winner.
 - `OVERVIEW.md`, `HOWTO-print-check.md` — design and print-check walkthrough.
-- `spec.json` / `spec.example.json` — the job contract (front-half keys are
+- `spec.json` / `spec.example.json` — the job contract (trace-stage keys are
   under `print`: `assume_opaque_bg`, `prep_colors`, `background_hex`,
   `sweep_max_candidates`, `invert`).
 - `requirements.txt` — required + optional deps, with install notes.
