@@ -118,6 +118,14 @@ test-side bug, and "fixing" the script to match it ships the bug.
   every other repeated finding), not a hard failure: the true width cannot be
   computed without a full transform stack, and failing the job would assert
   something the tool has not established.
+- **A passing result demands as much scrutiny as a failing one.** A clean run on
+  artwork that should not have passed means a rule is not measuring. When
+  everything passes, confirm the *inputs* were genuinely what you assumed (see
+  the render-from-the-same-file trap below), and re-derive one finding
+  independently — via `gs -sDEVICE=inkcov`, or a pixel diff against the source —
+  before reporting the pass. Verify a run from a clean slate, removing the
+  stage directories and re-running the documented commands, so the claim in the
+  docs is the claim you actually tested.
 - **Derive a spec option only when its key is absent, and report a conflict.**
   Where one option implies another (an underbase implies white is an ink),
   compute the implied value only if the key is missing. If both are set and
@@ -179,8 +187,69 @@ an image as placed, which is the number that matters. A 64×64 px bitmap scaled
 across a sheet legitimately measures **9 ppi** — a dramatic, real reject that no
 source inspection would catch.
 - **State the provenance of every number.** Exact (measured from a CMYK source)
-vs estimate (converted from RGB). A confidently wrong prepress figure is worse
-than no figure.
+  vs estimate (converted from RGB). A confidently wrong prepress figure is worse
+  than no figure.
+- **Inverting a source inverts its SUBSTRATE, and the result will pass every
+  gate.** A colour inverse maps every channel, so a design that is 92% white
+  shirt becomes a design that is 92% solid black — a full-bleed flood that will
+  not dry and will set off onto every sheet beneath it. Measured on one job,
+  same spec and both gates green:
+
+  | | original | inverted twin |
+  |---|---|---|
+  | screens | 5 | 4 |
+  | max TAC | 194% | 300% |
+  | mean TAC | 12% | 283% |
+  | sheet over limit | 0.00% | 91.93% |
+  | verdict | PASSED | PASSED |
+
+  Two independent reasons it slips through, and both must be fixed:
+  1. **The TAC gate is advisory on RGB input**, correctly, because Ghostscript
+     invents the separation — so 91.93% over the limit is a log note, never a
+     failure. Nothing else looks at coverage magnitude.
+  2. **`white_in_artwork` is decided by DECLARATION, not by area.** It is set
+     from `"#ffffff" in declared`, so a small white accent flips it true while
+     the actual 92% background is black — and black gets no substrate-aware
+     treatment at all, because only white has any.
+
+  So the one signal that would catch this — a single colour dominating the sheet
+  — is never asked. `ink_area_threshold_percent` (0.05%) is a per-colour
+  *inclusion* floor, a different question. Add a **dominant-colour flood
+  check**: computable straight from the SVG with no CMYK separation, so it
+  holds on RGB input where TAC cannot. A spot-colour job where one colour
+  covers more than roughly half the sheet is a flood, whatever TAC says.
+
+  The real fix is upstream of the check: **invert the artwork, not the
+  pixels.** Keep the substrate transparent (mask by alpha, or matte against
+  white then invert then re-apply alpha) so the twin traces as artwork on
+  nothing. Background removal does not help here — it would have to run BEFORE
+  the inversion, because by then a flattened substrate is baked in as pixels.
+  Implemented and measured: 92.06% opaque -> **7.94%**, max TAC 300% -> 178%,
+  mean 283% -> 9%, sheet-over-limit 91.93% -> **0.00%**.
+
+  Three rules make the fix hold:
+
+  - **Declare the substrate; never infer it silently.** Take the fabric colour
+    from the spec (`print.substrate` as hex, or `print.substrate_index` into
+    the palette) so the dark-garment case is reachable — there the majority
+    colour is the ART and the substrate is the minority one, which any
+    majority-colour inference gets backwards. A value that is neither valid hex
+    nor a palette member is a spec ERROR to report, never a fallback to "paper":
+    the silent fallback is exactly how the flood returned unnoticed.
+  - **Resolve it ONCE, on the shared options object**, so tracer, manifest,
+    proof and any advisory reader all get the same answer. Resolving it
+    independently in each stage is how two stages disagree about what the fabric
+    is.
+  - **Invert only pixels differing from the substrate, with a tolerance.** A
+    bare `255 - c` over every pixel inverts the antialiased edge pixels too,
+    leaving a halo of inverted fringe around every shape; match-then-invert
+    avoids it.
+
+  **When a test pins the buggy behaviour, replace the test.** A case asserting
+  "white background becomes black" is a regression test FOR the bug, and
+  satisfying it preserves the flood. Rewrite it to assert substrate
+  transparency, and add a second case where the declared substrate is the
+  MINORITY colour so a majority-colour shortcut cannot pass it.
 
 ## Pitfalls
 
@@ -248,6 +317,32 @@ than no figure.
   finding per path; twenty near-identical lines bury the message. Report the
   first ~10 in full and summarise the rest with the distinct values involved —
   the fix is the same for all of them. Same for path-complexity findings.
+- **A passing artefact can have discarded the artwork — and no gate will say
+  so.** Gate-passing and faithful are different properties, and a bw/binary
+  trace of a colour image separates cleanly: it passes every layer with
+  `hard=0, advisory=0` while reproducing nothing. Measured on a real 5-colour
+  example, six such candidates reported `passed=True` and `mae_art` **104.2**
+  against **0.005** for the six faithful ones — a ~20,000x gap, invisible in
+  every gate column, and a total tie on `(hard, advisory)` so gates-only
+  sorting ranks them level with faithful candidates.
+
+  Check artwork deviation against the declared colour count, and sort on that
+  AFTER hard gates and BEFORE advisories. Keep it **advisory, not a gate** — a
+  deliberately single-colour job is legitimate, so raise the advisory and add a
+  named finding rather than overruling the operator. Name the CAUSE in the
+  message, not just the number. And check any prose describing the sort still
+  describes it: a footer reading "sorted on gates and nothing more" is what
+  makes the missing dimension invisible. Full procedure, the two independent
+  checks, and the ascending-sort rank inversion that put the worst candidates
+  on top: `references/passed-is-not-faithful.md`.
+
+- **Cap rules must be checked against the candidate list that was actually
+  produced.** A cap applied per group (per speckle level, per preset) silently
+  starves the others: with a palette and cap 12, all twelve came from speckle=2
+  and speckle=16 was never traced. Round-robin across groups before truncating
+  (`zip_longest`), then verify by listing the presets present in the OUTPUT
+  rather than by reading the cap arithmetic.
+
 - **Status goes in stats; assumptions go on stdout.** Notes print above the
   pass/fail line and break any caller asserting on output, so an absent optional
   key — mere status — belongs in stats, not stdout. But an assumption the caller
@@ -319,6 +414,30 @@ than no figure.
   post-process reducer, so the only fix is a coarser upstream re-trace, and a
   finding that implies a fixable knob which does not exist sends the reader
   hunting for it.
+- **A spot-colour gate cannot be satisfied by tonal source — screen the input
+  before the trace, not after the failure.** A hard ink limit is unsatisfiable
+  by a tonal image by construction, so tuning the tracer cannot rescue it. Check
+  the source first: count distinct colours, and ask how many colours cover ~95%
+  of pixels. Measured on a real failure: an engraved floral with **245 608**
+  distinct colours, where even 256 colours covered only **34%** of pixels.
+  Zero of twelve candidates passed with colour intact; the two marked `passed`
+  did so by collapsing the artwork to **1 declared colour** (a silhouette) —
+  a pass that discards the artwork is worse than a visible failure, because it
+  reports success and ships nothing. Flat, hard-edged source (≤ the ink limit,
+  drawn from the spec palette, no gradients) traced at `mae_art` 0.005 with
+  zero hard findings. **When a passing artefact has an implausibly high
+  deviation score, check `declared_colors` and the colormode before believing
+  the pass** — it likely passed by deleting the art.
+- **Solid `#000000` alone can exceed the TAC limit.** TAC is measured from a
+  CMYK separation, and a solid black separates to a rich black near 400%
+  coverage on its own — over a 300% ceiling with no other ink present.
+  Measured: an otherwise-identical design tripped the advisory at 300% with
+  3.4% of the sheet over the limit using a black keyline, and reported no
+  advisory at all with a saturated hue in the same role. Recommend a saturated
+  hue for key lines, rules and registration marks; **overlapping plates trip it
+  too**, because coverage is summed per pixel, so separate shapes rather than
+  stacking them. Attribute this as a design finding, not a pipeline fault: the
+  number is correct, the artwork is the problem.
 - **Wrap rule crashes for production, unwrap them for debugging.** When checks
   are wrapped so a crash becomes a `[RULE] check crashed: ...` line, the
   traceback is gone — for diagnosis, import the module and call the check
@@ -336,6 +455,9 @@ than no figure.
   closure, emptiness, length and area, with defensive fallbacks.
 - `references/validator-testing.md` — the pytest suite shape: parametrised unit
   cases, two-way threshold checks, dedupe cases that use genuinely equal values.
+- `references/passed-is-not-faithful.md` — ranking candidates on whether the
+  artwork survived the trace, the ascending-sort rank inversion, and why the
+  verdict stays advisory.
 - `references/prepress-measurement.md` — rendered ink counting, the tiffsep
   plate-polarity calibration, the CMYK re-conversion trap, and TAC provenance.
 - `references/two-layer-pipeline.md` — orchestrating source validation and
