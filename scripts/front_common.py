@@ -128,6 +128,54 @@ def print_options(spec):
     return merged
 
 
+def substrate_hex(spec):
+    """The fabric colour: the palette entry that is a substrate, not an ink.
+
+    A screen-printed garment is not a white sheet. One palette colour may be
+    the garment itself -- a black tee, a natural cotton -- and that colour is
+    never laid down as ink. It still has to be declared in the palette,
+    because the tracer and the validator both reason about declared colours,
+    so tagging it rather than deleting it keeps one list of truth.
+
+    Resolution order:
+      1. ``print.substrate`` -- an explicit hex, wins outright.
+      2. ``print.substrate_index`` -- an index into ``palette``.
+      3. ``None`` -- nothing is declared as fabric. Callers must then infer,
+         which is the old behaviour and is correct only for paper.
+
+    A value that is in neither the palette nor a valid hex is a spec error, so
+    it raises rather than silently degrading to "no substrate" and flooding
+    the sheet again.
+    """
+    popt = print_options(spec)
+    palette = [str(c) for c in (spec.get("palette") or [])]
+
+    explicit = popt.get("substrate")
+    if explicit:
+        value = str(explicit).strip().upper()
+        if value.startswith("#") and hex_to_rgb(value) is not None:
+            return value
+        if value in [p.upper() for p in palette]:
+            return value
+        raise ValueError(
+            "print.substrate %r is neither a #rrggbb colour nor a member of "
+            "spec.palette" % explicit)
+
+    index = popt.get("substrate_index")
+    if index is not None:
+        try:
+            idx = int(index)
+        except (TypeError, ValueError):
+            raise ValueError("print.substrate_index %r is not an integer" % index)
+        if not 0 <= idx < len(palette):
+            raise ValueError(
+                "print.substrate_index %d is out of range for a %d-colour "
+                "palette" % (idx, len(palette)))
+        return palette[idx].upper()
+
+    return None
+
+
 def resolve_workers(n_tasks, explicit=None):
     """How many worker processes to use for ``n_tasks``.
 
