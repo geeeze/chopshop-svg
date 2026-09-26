@@ -45,14 +45,24 @@ def test_no_machine_name_is_hardcoded_in_the_response(monkeypatch):
     """Guard the leak itself: a real hostname must never reach the wire.
 
     Catches the regression where the field was a literal, which looked fine
-    locally and published the host name to anyone reading the repo.
+    locally and published the host name to anyone reading the repo. The
+    forbidden names are built at runtime from this machine's own hostname
+    rather than written out, so this test does not republish the very name it
+    is guarding against.
     """
+    import socket
+
     monkeypatch.setenv("CHOPSHOP_RUNNER_LABEL", "sentinel-label")
     payload = runner.health_payload()
     assert payload["host"] == "sentinel-label"
-    # The module source must not carry a hostname either.
-    source = MODULE_PATH.read_text()
-    assert "geenet" not in source
+
+    source = MODULE_PATH.read_text().lower()
+    machine = socket.gethostname().lower()
+    if len(machine) > 3:          # skip trivial/placeholder hostnames
+        assert machine not in source
+    # No literal hostname assignment should reappear either.
+    assert '"host": "' not in source
+
 
 
 
