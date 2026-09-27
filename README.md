@@ -473,7 +473,7 @@ engine.
 .venv/bin/pyflakes scripts/*.py validate_svg.py preflight.py  # lint
 ```
 
-404 tests pass. The suite uses synthetic images generated in-test (Pillow),
+419 tests pass. The suite uses synthetic images generated in-test (Pillow),
 never the real artwork, so it runs anywhere without the `00_source/` batch.
 Tests that need system tools (inkscape, gs, qpdf, poppler-utils) skip
 cleanly when those are absent — a fresh checkout without tools won't look
