@@ -82,6 +82,11 @@ on each pick, loop for more picks or quit.
   poppler-utils (`pdfinfo`/`pdfimages`), potrace.
 - **Optional prep tools** must stay skippable when absent: pngquant, rembg,
   realesrgan-ncnn-vulkan.
+- **ImageMagick is the optional front-half filter engine** (`scripts/im_filters.py`,
+  the "chopshop-im" bench). It is installed in the container image, but the
+  bench must exit 3 with the install hint when it is absent -- never fall back
+  to a Python re-implementation of a named filter. GIMP is deliberately NOT
+  installed: its GEGL filters are not worth ~1 GB plus a versioned batch API.
 - Tracer: the `vtracer` PyPI wheel (`0.6.15`) is the Python-API-only build — **no
   `vtracer` CLI on PATH, and no `gradient_step` parameter**. The standalone CLI
   has `--help` and more flags; the pip API's available params come from
@@ -155,7 +160,7 @@ docker compose run --rm chopshop ./front_pipeline.sh 00_source/art.png # trace s
 .venv/bin/pyflakes scripts/*.py validate_svg.py preflight.py  # lint
 ```
 
-The suite currently passes (369 tests). If you change the trace stage, add or
+The suite currently passes (400 tests). If you change the trace stage, add or
 update the matching test in `tests/` — especially any change to tracing,
 comparison, or prep behaviour.
 
@@ -181,6 +186,15 @@ comparison, or prep behaviour.
   one raster. NOT the candidate generator (`trace_sweep.py` is). Ranks by
   MAE_art as a measurement order and never recommends a cell, per the law
   above. Writes `08_tune/<stem>/tune.{md,json}` + an optional contact sheet.
+- `scripts/im_filters.py` — the "chopshop-im" filter bench: named ImageMagick
+  passes over a raster, producing candidate INPUTS to `prep_raster.py`, in
+  `09_filters/<stem>/`. `tune_sweep.py` sweeps the TRACER's parameters against
+  one raster; this sweeps the RASTER against one tracer. Orders by
+  `colours_at_95pct` then `edge_energy` as a measurement order and never
+  recommends a variant. Two traps it exists to encode: `identity` must be a
+  byte copy (a no-op IM pass still flattens alpha), and IM 7's DEFAULT dither
+  is Riemersma, so naming it is a no-op and a "dithered" preset built on it
+  emits the undithered bytes. `-dither None` is the print reading.
 - `scripts/palette_variants.py` — auxiliary Chopshop-Aided-Design layer (wired
   into no stage): re-colours a finished trace onto the palettes in
   `scripts/palettes.json`, leaving the geometry untouched (only

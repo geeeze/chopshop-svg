@@ -9,6 +9,11 @@
 # Run the front half on a raster (candidates in ./02_traced, report in ./04_validated):
 #   docker compose run --rm chopshop ./front_pipeline.sh 00_source/art.png
 #
+# Filter the raster first (chopshop-im bench -> ./09_filters, then feed a variant
+# to the front half):
+#   docker compose run --rm chopshop .venv/bin/python scripts/im_filters.py \
+#       00_source/art.png --contact-sheet
+#
 # With podman instead of docker: `podman compose` (podman-compose) understands
 # this same file.
 
@@ -54,6 +59,7 @@ services:
       - ./03_cleaned:/app/03_cleaned
       - ./04_validated:/app/04_validated
       - ./05_final:/app/05_final
+      - ./09_filters:/app/09_filters
     restart: unless-stopped
 
   chopshop:
@@ -70,3 +76,4 @@ services:
       - ./03_cleaned:/app/03_cleaned
       - ./04_validated:/app/04_validated
       - ./05_final:/app/05_final
+      - ./09_filters:/app/09_filters

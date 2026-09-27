@@ -272,7 +272,7 @@ chopshop-svg/
 ├── requirements.json          # requirements matrix (R-NN | requirement | source | check)
 ├── tests/                     # pytest suite (synthetic fixtures only)
 ├── 00_source/                 # example raster/SVG batch for the print check
-└── 01_prepped/ 02_traced/ 04_validated/ 05_final/ 06_run/ 07_palettes/   # generated (gitignored)
+└── 01_prepped/ 02_traced/ 04_validated/ 05_final/ 06_run/ 07_palettes/ 08_tune/ 09_filters/   # generated (gitignored)
 ```
 
 ---
@@ -365,6 +365,107 @@ that is not a real `#rrggbb` is rejected rather than written into the artwork.
 
 ---
 
+## Filter bench (`scripts/im_filters.py`) — "chopshop-im"
+
+The front-half auxiliary layer that runs **before** the tracer. `prep_raster.py`
+prepares a raster it was handed; this decides what to hand it. It applies one
+named ImageMagick pass per variant — raster in, raster out — and every variant
+is a candidate **input** to `./front_pipeline.sh`, never a trace.
+
+```bash
+.venv/bin/python scripts/im_filters.py --list
+.venv/bin/python scripts/im_filters.py 00_source/art.png --contact-sheet
+.venv/bin/python scripts/im_filters.py 00_source/art.png --presets kuwahara,flat6
+.venv/bin/python scripts/im_filters.py 00_source/art.png --keep-alpha
+./front_pipeline.sh 09_filters/art/flat6.png     # feed a variant forward
+```
+
+Output lands in `09_filters/<stem>/`: one PNG per preset, a contact sheet
+(`--contact-sheet`), and `filters.json` / `filters.md`.
+
+### Why it is a raster lever, not a palette lever
+
+Most "too many nodes / too jagged" complaints are pixel-level noise, not colour
+structure: VTracer traces literal pixel boundaries, so grain becomes hundreds of
+corrective nodes. Measured in this repo, quantising the *source* does not reduce
+node count (max nodes 967 → 912 → 1415 across 6–48 colours). Noise and soft
+gradients are the lever; this is where they get pulled.
+
+### The report is a measurement order, never a recommendation
+
+| column | what it measures |
+| --- | --- |
+| `distinct colours` / `colours to 95%` | what a screen print has to hold |
+| `edge energy` | mean &#124;Laplacian&#124;: the high-frequency floor the tracer will chase |
+| `dither` | which dither the preset used — see below |
+
+Rows are sorted by `colours to 95%`, then `edge energy`. Whether the **art**
+survived a filter is not in the table: compare the PNGs (or the contact sheet).
+Exactly like `tune_sweep.py`, it produces cells and metrics and picks nothing.
+
+### Dither is the quietest lever here — and IM's default is the wrong one
+
+ImageMagick dithers **by default**, and the default method is Riemersma, so a
+bare `-colors 6` is silently dithering. Two things were measured on IM 7.1.1-43
+rather than assumed:
+
+- **Naming the default changes nothing.** `-dither Riemersma -colors 6` and
+  `-dither Riemersma -remap pal.png` are *byte-identical* to the same commands
+  with no dither flag. A "dithered" preset built on Riemersma reports success
+  while emitting the undithered bytes. `tests/test_im_filters.py` pins this.
+- **`-dither None` and `FloydSteinberg` really do differ**, and the cost shows up
+  in the `edge energy` column: on the same 800×450 test image, `remap-spec`
+  measured 2.76 against 53.35 for `remap-spec-dither` — a **19×** increase in
+  high-frequency energy, which is precisely what inflates node count. `flat6`
+  2.80 → `flat6-dither` 23.18 (8×).
+
+So every reducing preset states its dither explicitly: `-dither None` is the
+print reading (hard flat edges, clean separation), `*‑dither` variants use
+FloydSteinberg as the photographic reading for comparison.
+
+### Presets
+
+`identity` and `flatten` are the controls. `identity` copies the source
+**byte-for-byte** — an earlier version ran a no-op IM pass, and the alpha
+compositing inside it moved 36 931 pixels of an 800×450 image (max Δ94), so the
+"control" was itself a transform. `flatten` is that alpha flatten on its own, so
+its cost is a reading instead of a hidden step inside every other variant.
+
+Noise: `despeckle`, `median3`, `median5`, `kuwahara`, `bilateral` (a bilateral
+stand-in via `-selective-blur`, preferred for skin/hair). Colour depth: `flat8`,
+`flat6`, `flat6-dither`, `poster6`. Anisotropy: `offset-blend`. Chains:
+`denoise-flat`, `denoise-then-edge`. Palette remaps: `remap-spec` /
+`remap-auto` (± `-dither`), which `-remap` the image onto a generated palette
+strip — the spec's declared palette, or the artwork's own 6-colour reading.
+
+> **`offset-blend` is a directional blur, not noise cancellation.** The
+> trace-stage notes propose averaging an offset copy as noise cancellation by
+> the dark-frame-subtraction analogy. That analogy does not hold: the two noise
+> samples are not independent (the noise is *in* the image, so the shifted copy
+> carries it too), so nothing cancels — it convolves. It is still useful for
+> anisotropy, but it is a blur, and offsets beyond ~2 px create double edges
+> that VTracer traces as *extra* regions, so the preset caps the offset.
+
+### Every variant comes out RGB
+
+`-colors`, `-posterize` **and** `-remap` all write an **indexed** (mode `P`)
+PNG by default — measured: `flat6`, `flat8`, `flat6-dither`, `denoise-flat`,
+`poster6` and all four remap presets were mode `P`. The bench forces
+`-define png:color-type=2`, so the rest of the chain sees one colour type. Only
+`identity` is left alone, because it is the byte-exact control.
+
+This is not cosmetic: on an indexed PNG Pillow's `getpixel` returns a palette
+**index** — an `int`, not a colour — which made `prep_raster.py`'s
+background-uniformity check raise `TypeError` internally and silently degrade to
+`background: could not sample`. `prep_raster.py` now promotes a copy before
+sampling, so it handles indexed input from any source (pngquant can emit it
+too), and `tests/test_prep_raster.py` pins that.
+
+ImageMagick is optional. With no engine on PATH the bench exits **3** with the
+install command and never substitutes a Python filter for the named one. Exit
+codes: 0 = every variant written, 1 = a variant failed, 2 = bad usage, 3 = no
+engine.
+
 ## Tests
 
 ```bash
@@ -372,7 +473,7 @@ that is not a real `#rrggbb` is rejected rather than written into the artwork.
 .venv/bin/pyflakes scripts/*.py validate_svg.py preflight.py  # lint
 ```
 
-369 tests pass. The suite uses synthetic images generated in-test (Pillow),
+404 tests pass. The suite uses synthetic images generated in-test (Pillow),
 never the real artwork, so it runs anywhere without the `00_source/` batch.
 Tests that need system tools (inkscape, gs, qpdf, poppler-utils) skip
 cleanly when those are absent — a fresh checkout without tools won't look
