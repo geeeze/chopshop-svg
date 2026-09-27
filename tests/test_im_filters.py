@@ -332,17 +332,20 @@ def test_missing_engine_exits_three(tmp_path, monkeypatch):
                      False) == 3
 
 
+@needs_imagemagick
 def test_unknown_preset_is_refused(tmp_path):
     src = write_png(str(tmp_path / "art.png"), THREE_FLAT)
     assert imf.build(src, str(tmp_path), ["not-a-preset"], False, "#ffffff", 1,
                      False) == 2
 
 
+@needs_imagemagick
 def test_missing_source_is_refused(tmp_path):
     assert imf.build(str(tmp_path / "nope.png"), str(tmp_path), ["flat6"],
                      False, "#ffffff", 1, False) == 2
 
 
+@needs_imagemagick
 def test_bad_preset_is_reported_not_raised(tmp_path, monkeypatch):
     """One failing variant must not take down the bench."""
     src = write_png(str(tmp_path / "art.png"), THREE_FLAT)
