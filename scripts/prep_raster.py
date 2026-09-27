@@ -192,14 +192,21 @@ def _check_color_count(img, checks):
 def _check_background(img, checks):
     """Border-ring uniformity: a cheap proxy for 'solid background vs photo'."""
     try:
-        w, h = img.size
+        # Sample a REAL colour image.  On a P-mode (indexed) PNG -- which is
+        # what `magick -remap` emits, and what pngquant can emit -- getpixel
+        # returns a palette INDEX, an int, so the old `px[:3]` raised
+        # TypeError and this whole check silently degraded to "could not
+        # sample". Promoting a copy resolves the palette without mutating the
+        # caller's image.
+        probe = img if img.mode in ("RGB", "RGBA") else img.convert("RGB")
+        w, h = probe.size
         ring = []
         for x in range(0, w, max(1, w // 64)):
-            ring.append(img.getpixel((x, 0)))
-            ring.append(img.getpixel((x, h - 1)))
+            ring.append(probe.getpixel((x, 0)))
+            ring.append(probe.getpixel((x, h - 1)))
         for y in range(0, h, max(1, h // 64)):
-            ring.append(img.getpixel((0, y)))
-            ring.append(img.getpixel((w - 1, y)))
+            ring.append(probe.getpixel((0, y)))
+            ring.append(probe.getpixel((w - 1, y)))
         arr = np.asarray([px[:3] for px in ring], dtype=np.float64)
         std = float(arr.std())
         mean = tuple(int(round(c)) for c in arr.mean(axis=0))

@@ -118,6 +118,32 @@ def test_check_mode_reports_solid_background(tmp_path):
     assert bg["status"] == "pass"  # white border is uniform
 
 
+def test_background_check_survives_an_indexed_png(tmp_path):
+    """A P-mode (indexed) PNG must still get a real border reading.
+
+    `magick -remap` -- the chopshop-im bench's palette presets -- emits
+    indexed PNGs, and on those getpixel returns a palette INDEX, an int.  The
+    old `px[:3]` raised TypeError and the whole check degraded to "could not
+    sample", so every remapped variant lost its background reading.
+    """
+    img = Image.new("RGB", (64, 48), "#ffffff")
+    for x in range(0, 32):
+        for y in range(48):
+            img.putpixel((x, y), (0, 0, 0))
+    indexed = img.convert("P", palette=Image.ADAPTIVE, colors=2)
+    src = tmp_path / "art.png"
+    indexed.save(src)
+    spec = make_spec(tmp_path)
+
+    code, out_dir = _run(tmp_path, str(src), spec)
+
+    assert code == 0
+    sidecar = _load_sidecar(out_dir)
+    bg = next(c for c in sidecar["checks"] if c["check"] == "background")
+    assert "could not sample" not in bg["detail"], bg
+    assert bg["status"] in ("pass", "warn")
+
+
 def test_vector_input_is_copied_through(tmp_path):
     src = tmp_path / "art.svg"
     src.write_text("<svg xmlns='http://www.w3.org/2000/svg'/>", encoding="utf-8")
