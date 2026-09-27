@@ -304,6 +304,72 @@ def _publish_source_previews(job: dict, stem: str) -> dict:
     return published
 
 
+# Flat names for the expanded-prep artifacts. They are copied to the job root
+# because ``artifact_path`` resolves ``job_dir / name`` and nothing deeper, so a
+# nested path would archive fine but never be individually servable. The two
+# contact sheets would collide under one name, hence the prefixes.
+PREP_EXPAND_ARTIFACTS = (
+    ("prep-expand.json", "prep-expand.json"),
+    ("prep-expand.md", "prep-expand.md"),
+    ("tune/tune.json", "tune.json"),
+    ("tune/tune.md", "tune.md"),
+    ("tune/contact-sheet.png", "tune-contact-sheet.png"),
+    ("node_reduce/node-reduce.json", "node-reduce.json"),
+)
+
+
+def _publish_prep_expand(job: dict, stem: str) -> dict:
+    """Copy the expanded-prep reports to the job root and summarise them.
+
+    Absent artifacts are simply not listed: the stage is optional and a job that
+    did not ask for it must not look like a job whose stage broke.
+    """
+    source = Path(job["dir"]) / "prep_expand"
+    publish = job.get("dir") and Path(job["dir"])
+    artifacts: dict[str, str] = {}
+    if not source.is_dir():
+        return {"steps": [], "artifacts": artifacts, "notes": []}
+
+    pairs = list(PREP_EXPAND_ARTIFACTS)
+    # im_filters nests one level by source stem (filters/<stem>/filters.json).
+    for nested in sorted(source.glob("filters/*/filters.json")):
+        pairs.append((str(nested.relative_to(source)), "filters.json"))
+        md = nested.with_name("filters.md")
+        if md.is_file():
+            pairs.append((str(md.relative_to(source)), "filters.md"))
+        sheet = nested.with_name("contact-sheet.png")
+        if sheet.is_file():
+            pairs.append((str(sheet.relative_to(source)), "filters-contact-sheet.png"))
+
+    for relative, flat in pairs:
+        candidate = source / relative
+        if candidate.is_file():
+            shutil.copy2(candidate, publish / flat)
+            artifacts[flat] = relative
+
+    summary = None
+    report = source / "prep-expand.json"
+    if report.is_file():
+        try:
+            summary = json.loads(report.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            summary = None
+
+    notes: list[str] = []
+    steps = list((summary or {}).get("steps_run") or [])
+    node = (summary or {}).get("node_reduce") or {}
+    if node.get("status") == "ok" and node.get("over_gate"):
+        notes.append("node_reduce wrote %d reduced copies of over-gate "
+                     "candidates; originals kept" % len(node.get("written") or []))
+    for key, label in (("filters", "filters"), ("tune", "tune")):
+        phase = (summary or {}).get(key) or {}
+        if phase.get("status") == "skipped":
+            notes.append("%s skipped: %s" % (label, phase.get("reason")))
+    return {"steps": steps, "artifacts": artifacts, "notes": notes,
+            "report": json.loads(report.read_text(encoding="utf-8"))
+            if report.is_file() else None}
+
+
 def run_front(job: dict) -> None:
     with PIPELINE_LOCK:
         if job.get("cancel"):
@@ -321,13 +387,21 @@ def run_front(job: dict) -> None:
                              f"{normalized['original_width']}x{normalized['original_height']} -> "
                              f"{normalized['width']}x{normalized['height']}")
         _append_log(job, f"front pipeline: {input_path}")
+        # spec.print.prep_expand benches (filters, tune, node_reduce) write here
+        # rather than to the shared 08_tune/09_filters tree, so their output
+        # lands inside the job directory: the archive endpoint 7-Zips that whole
+        # directory and DELETE rmtree's it, and a per-job artifact left in the
+        # project tree would survive the delete and leak into the next job.
+        expand_dir = Path(job["dir"]) / "prep_expand"
         code = _run_logged(job, [str(PROJECT / "front_pipeline.sh"), str(input_path)],
-                           {"SPEC": str(spec_path), "FRONT_PIPELINE_WORKERS": "1"})
+                           {"SPEC": str(spec_path), "FRONT_PIPELINE_WORKERS": "1",
+                            "PREP_EXPAND_OUT": str(expand_dir)})
         if job.get("cancel"):
             raise Cancelled()
         prep = PROJECT / "01_prepped" / f"{stem}.prep.json"
         prep_summary = json.loads(prep.read_text(encoding="utf-8")) if prep.is_file() else None
         previews = _publish_source_previews(job, stem)
+        expand = _publish_prep_expand(job, stem)
         candidates = _copy_front_outputs(job, stem) if code in (0, 1) else []
         if not candidates:
             raise RuntimeError(f"front pipeline exited {code} without candidates")
@@ -336,10 +410,16 @@ def run_front(job: dict) -> None:
         else:
             _append_log(job, "source previews: source.png (no inverse twin; "
                              "set spec.print.invert to produce one)")
+        if expand.get("steps"):
+            _append_log(job, "prep expand: %s -> %s" % (
+                ", ".join(expand["steps"]), ", ".join(sorted(expand["artifacts"]))))
+            for note in expand.get("notes", []):
+                _append_log(job, "prep expand: " + note)
         with STATE_LOCK:
             job.update(stem=stem, candidates=candidates, comparison=json.loads(
                 (Path(job["dir"]) / "comparison.json").read_text(encoding="utf-8")),
-                prep_summary=prep_summary, source_previews=previews, state="done")
+                prep_summary=prep_summary, source_previews=previews,
+                prep_expand=expand, state="done")
 
 
 def run_back(validation: dict) -> None:
@@ -454,6 +534,7 @@ class Handler(BaseHTTPRequestHandler):
             with STATE_LOCK:
                 self.json_response(200, {"id": job["id"], "state": job["state"],
                     "log_tail": job["log"][-40:], "prep_summary": job.get("prep_summary"),
+                    "prep_expand": job.get("prep_expand"),
                     "candidate_count": len(job.get("candidates", [])),
                     "comparison": job.get("comparison"), "error": job.get("error")})
             return

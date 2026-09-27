@@ -16,6 +16,13 @@
 #   ./front_pipeline.sh artwork.png --loop          # then pick candidates interactively
 #   SPEC=other.json ./front_pipeline.sh art.png     # different spec
 #
+# spec.print.prep_expand additionally runs the expanded prep benches at the two
+# points where they belong -- raster filters and the tune sweep after prep, and
+# node_reduce after the sweep, because it needs candidates to work on. All are
+# off unless the key asks for them, so a spec without it behaves exactly as
+# before. Their reports land in 06_run/<stem>/prep_expand (override with
+# PREP_EXPAND_OUT), and they never change which candidate is chosen.
+#
 # Exit codes:
 #   0  at least one candidate passed both gates (paths printed)
 #   1  candidates exist but none passed (comparison path printed)
@@ -116,6 +123,33 @@ if [ ! -f "$PREPPED" ]; then
 fi
 
 # --------------------------------------------------------------------------
+# stage 1b: expanded prep -- raster filters and the tune sweep (spec-gated)
+# --------------------------------------------------------------------------
+# Gated on the spec key rather than run-and-no-op, so a job that does not ask
+# for these produces exactly the same log and artefacts as before they existed.
+PREP_EXPAND_OUT="${PREP_EXPAND_OUT:-$PROJECT/06_run/$STEM/prep_expand}"
+PREP_EXPAND_ENABLED="$("$PY" - "$SPEC" <<'PYEOF'
+import json, sys
+try:
+    spec = json.load(open(sys.argv[1]))
+except Exception:
+    print("0"); raise SystemExit(0)
+block = (spec.get("print") or {}).get("prep_expand") or {}
+print("1" if isinstance(block, dict) and any(bool(v) for v in block.values()) else "0")
+PYEOF
+)"
+if [ "$PREP_EXPAND_ENABLED" = "1" ]; then
+  echo
+  echo "--- stage 1b: expanded prep (filters, tune) ---"
+  "$PY" "$PROJECT/scripts/prep_expand.py" --phase prep \
+      "$PREPPED" "$SPEC" --out-dir "$PREP_EXPAND_OUT" || {
+    # A bench that fails must not lose the job: the artefacts it would have
+    # produced are advisory measurements, and the tracer does not read them.
+    echo "prep_expand (prep) failed; continuing without it" >&2
+  }
+fi
+
+# --------------------------------------------------------------------------
 # stage 2: trace sweep
 # --------------------------------------------------------------------------
 TRACED="$PROJECT/02_traced/$STEM"
@@ -133,6 +167,24 @@ fi
 if [ "$CODE_TRACE" -ne 0 ]; then
   echo "trace_sweep failed (exit $CODE_TRACE)" >&2
   exit 2
+fi
+
+# --------------------------------------------------------------------------
+# stage 2b: node_reduce -- reduced COPIES of the over-gate candidates
+# --------------------------------------------------------------------------
+# Before compare, not after: the copies are written as fresh candidate_NN.svg
+# files in the traced dir, and compare discovers candidates by that exact name,
+# so they have to exist before it runs to be measured at all. The originals are
+# never modified -- a run whose gate "clears" but whose artwork erodes is a real
+# outcome (see scripts/NODE_REDUCTION.md), so both are kept and both are graded.
+if [ "$PREP_EXPAND_ENABLED" = "1" ]; then
+  echo
+  echo "--- stage 2b: node_reduce ---"
+  "$PY" "$PROJECT/scripts/prep_expand.py" --phase post-trace \
+      "$STEM" "$SPEC" --out-dir "$PREP_EXPAND_OUT" \
+      --traced-root "$PROJECT/02_traced" || {
+    echo "prep_expand (node_reduce) failed; continuing with the traced candidates" >&2
+  }
 fi
 
 # --------------------------------------------------------------------------

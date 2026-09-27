@@ -65,9 +65,32 @@ the print check on each in turn:
 ./front_pipeline.sh artwork.png --loop
 ```
 
-### Two side tools
+### Three side tools
 
-Neither is part of the workflow above; both are run by hand.
+None is part of the default workflow above. All three run by hand, **or** from
+the spec: set `print.prep_expand` in `spec.json` and `front_pipeline.sh` runs
+them at the two points where they belong — `filters` and `tune` after prep (both
+work on the raster), `node_reduce` after the sweep (it needs candidates). The
+studio's JSON page has the controls, under **Prep — expanded**. Off by default:
+a spec without the key behaves exactly as before, and an empty block is a no-op.
+
+```bash
+# the same three, driven by the spec, in the right order
+.venv/bin/python scripts/prep_expand.py --phase prep      01_prepped/art.prepped.png spec.json --out-dir out/
+.venv/bin/python scripts/prep_expand.py --phase post-trace art spec.json --out-dir out/
+# -> out/prep-expand.json, out/prep-expand.md, plus each tool's own report
+
+# when run by the pipeline the artifacts land in 06_run/<stem>/prep_expand
+# (PREP_EXPAND_OUT overrides that), and `reduced` copies are extra candidates: the
+# originals are never modified, so both are graded in the same comparison.
+```
+
+**`scripts/prep_expand.py`** — the integration point for the other two (plus
+`im_filters.py` below): one spec key, one report, run in the right order. It
+exists so the studio can drive these benches without a second source of truth
+for what ran, and so a job's artifacts land inside the job directory rather than
+the shared `08_tune`/`09_filters` trees — which is what puts them in the archive
+download and removes them on delete.
 
 **`scripts/tune_sweep.py`** — a batch bench for finding a good trace
 configuration. It re-traces ONE raster under many parameter sets, measures
@@ -229,6 +252,7 @@ The render-preflight tolerances and the trace-stage prep/trace defaults.
 | `prep_colors` | int \| null | `16` | *Trace stage* — pngquant colour budget in prep; `null` disables quantisation. |
 | `background_hex` | string | `"#ffffff"` | *Trace stage* — colour to flatten alpha onto before tracing. |
 | `sweep_max_candidates` | int | `12` | *Trace stage* — cap on the number of traced candidates. |
+| `prep_expand` | object | *(absent)* | *Trace stage* — run the expanded prep benches, at the two points they belong. Absent (or an empty block) runs nothing. Sub-keys: `filters` (`presets`, `contact_sheet`, `keep_alpha`, `spec`) and `tune` (`presets`, `max_cells`, `contact_sheet`, `with_node_reduce`, `filter_speckle`, `hierarchical`) run after prep; `node_reduce` (`max_nodes`, `tolerance`, `tolerance_cap`, `verify`) runs after the sweep and writes a reduced **copy** of every over-gate candidate as a fresh `candidate_NN.svg`. `max_nodes` left out falls back to `geometry.max_nodes_per_path`, so the bench and the gate cannot disagree. All of it is measurement, and it never picks a candidate. |
 | `invert` | bool \| object | `true` | *Trace stage* — also write a colour-inverted **twin** of the prepped raster (`<stem>.prepped.inverse.png`), in both check and fix mode. `{"mode": "negative"}` inverts chroma and **preserves alpha** (use it for a transparent matte); the default `photometric` inverts every band and therefore flattens a transparent background to opaque. **Caveat:** this is a blind per-channel flip, so on a substrate-dominated source it turns the fabric into a full-bleed ink flood -- the shipped example went from 0.00% to 91.93% of the sheet over the 300% limit. Prefer the `pitch_shift` stage's `inverse` variant, which identifies the substrate (see `substrate` above) and leaves it transparent instead. The twin is a derived artefact and may be absent; its presence is always recorded in the `.prep.json` sidecar under `inverse`. A stale twin from an earlier run is deleted when this is turned off, since the prep dir is globbed. |
 
 ### Notes
@@ -250,6 +274,7 @@ The render-preflight tolerances and the trace-stage prep/trace defaults.
 ```
 chopshop-svg/
 ├── front_pipeline.sh          # TRACE stage orchestrator: prep → sweep → compare
+│                              #   (+ the spec-gated expanded prep benches)
 ├── pipeline.sh                # PRINT CHECK: validate + preflight a chosen SVG
 ├── validate_svg.py            # Layer A — source-level SVG checks
 ├── preflight.py               # Layer B — render + colour/ink/coverage checks
@@ -257,6 +282,9 @@ chopshop-svg/
 ├── requirements.txt           # Python dependencies (required + optional)
 ├── scripts/
 │   ├── prep_raster.py         # front: check/normalise a raster (--fix to modify)
+│   ├── prep_expand.py         # front: runs the expanded prep benches from
+│   │                          #      spec.print.prep_expand (filters, tune,
+│   │                          #      node_reduce), one report for both phases
 │   ├── trace_sweep.py         # front: multi-pass VTracer candidate sweep
 │   ├── compare_candidates.py  # front: run every candidate through A + B,
 │   │                          #      then rank on whether the artwork survived
@@ -473,7 +501,7 @@ engine.
 .venv/bin/pyflakes scripts/*.py validate_svg.py preflight.py  # lint
 ```
 
-419 tests pass. The suite uses synthetic images generated in-test (Pillow),
+435 tests pass. The suite uses synthetic images generated in-test (Pillow),
 never the real artwork, so it runs anywhere without the `00_source/` batch.
 Tests that need system tools (inkscape, gs, qpdf, poppler-utils) skip
 cleanly when those are absent — a fresh checkout without tools won't look
