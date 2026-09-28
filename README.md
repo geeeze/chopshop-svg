@@ -65,7 +65,7 @@ the print check on each in turn:
 ./front_pipeline.sh artwork.png --loop
 ```
 
-### Three side tools
+### Three side tools — plus a fourth bench that nothing runs
 
 None is part of the default workflow above. All three run by hand, **or** from
 the spec: set `print.prep_expand` in `spec.json` and `front_pipeline.sh` runs
@@ -73,6 +73,13 @@ them at the two points where they belong — `filters` and `tune` after prep (bo
 work on the raster), `node_reduce` after the sweep (it needs candidates). The
 studio's JSON page has the controls, under **Prep — expanded**. Off by default:
 a spec without the key behaves exactly as before, and an empty block is a no-op.
+
+**`scripts/palette_variants.py` is not one of them, and no pipeline call reaches
+it.** It is a fourth bench and it is **standalone and unwired**: no stage in
+`front_pipeline.sh` or `pipeline.sh` runs it, it has no `prep_expand` key and no
+spec key of its own, and nothing calls it except its own tests and a hand-run
+command line (see *Palette variations* below). The three above are wired; this
+one is the exception.
 
 ```bash
 # the same three, driven by the spec, in the right order
@@ -276,10 +283,22 @@ chopshop-svg/
 ├── front_pipeline.sh          # TRACE stage orchestrator: prep → sweep → compare
 │                              #   (+ the spec-gated expanded prep benches)
 ├── pipeline.sh                # PRINT CHECK: validate + preflight a chosen SVG
+├── runner.py                  # HTTP runner: POST /jobs, GET /jobs/:id,
+│                              #   GET /files/:job_id/<name>, DELETE /jobs/:id
+│                              #   (see docs/runner-http-contract.md)
 ├── validate_svg.py            # Layer A — source-level SVG checks
 ├── preflight.py               # Layer B — render + colour/ink/coverage checks
 ├── spec.json                  # the active job contract (see spec.example.json)
 ├── requirements.txt           # Python dependencies (required + optional)
+├── Dockerfile / docker-compose.yml  # the container image and the runner service
+├── docs/
+│   ├── OVERVIEW.md            # why the two gates, and the design reasoning
+│   ├── HOWTO-print-check.md   # running and reading the print check
+│   ├── runner-http-contract.md # the runner's HTTP surface (promoted from the
+│   │                          #   in-repo skill; kept in sync by hand)
+│   └── agents/                # engineering-skill config (issue tracker,
+│                              #   triage labels, domain notes)
+├── CONTEXT.md                 # working state + the canonical test count
 ├── scripts/
 │   ├── prep_raster.py         # front: check/normalise a raster (--fix to modify)
 │   ├── prep_expand.py         # front: runs the expanded prep benches from
@@ -289,16 +308,29 @@ chopshop-svg/
 │   ├── compare_candidates.py  # front: run every candidate through A + B,
 │   │                          #      then rank on whether the artwork survived
 │   ├── pick_finish.py         # front: --loop menu driver
+│   ├── front_common.py        # front: shared helpers (sha256, tool versions,
+│   │                          #      the default print.* values)
+│   ├── im_filters.py          # bench: named ImageMagick raster passes (chopshop-im)
+│   ├── tune_sweep.py          # bench: re-trace one raster under many parameters
+│   ├── node_reduce.py         # bench: the geometry_overload remedy (over-gate paths)
 │   ├── snap_colors.py         # snap a trace's colours to a palette
 │   ├── palette_variants.py    # aux: re-colour a finished trace onto named palettes
+│   │                          #      (standalone — nothing in the pipeline calls it)
 │   ├── palettes.json          # palette library for palette_variants.py
 │   ├── run_batch.py           # batch-run the print check over a folder
 │   ├── run_record.py          # provenance spine: stitch a run into 06_run/<stem>.run.json
 │   ├── closeout.py            # pass/fail board per candidate vs requirements.json
+│   ├── triage.py              # P1 gates + bucket key + canonical form + text sim
+│   ├── triage_events.py       # P2 job-independent learning store (events.jsonl)
+│   ├── triage_ranker.py       # P4 preference ranker + P5 bucket bandit
+│   ├── disk_check.py          # disk-capacity gate called by both shell entry points
+│   ├── orphan_sweep.py        # artifacts of deleted jobs (run by a host-local timer)
+│   ├── make_example_source.py # rebuild 00_source/00-example.png
 │   ├── TRACE_STAGE.md         # trace-stage documentation
 │   ├── NODE_REDUCTION.md      # node-reduction sourcing research (no tool adopted)
 ├── requirements.json          # requirements matrix (R-NN | requirement | source | check)
 ├── tests/                     # pytest suite (synthetic fixtures only)
+├── skills/                    # in-repo agent skill (references/ docs)
 ├── 00_source/                 # example raster/SVG batch for the print check
 └── 01_prepped/ 02_traced/ 04_validated/ 05_final/ 06_run/ 07_palettes/ 08_tune/ 09_filters/   # generated (gitignored)
 ```
@@ -338,6 +370,268 @@ both flagged as missing links until they exist):
 
 ---
 
+## Candidate triage + learning stack (`scripts/triage*.py`)
+
+A five-phase triage layer that sits **on top of** the trace stage: it can gate,
+group, order and schedule candidates, and it can learn from what a human does
+with them. The whole layer is three stdlib-only modules (no numpy, scipy or
+sklearn — it has to run wherever the pipeline runs) and **none of the five phases
+picks a winner**: `gate` drops, demotes or passes; `rank` orders; `choose_bucket`
+picks which parameter *family* the sweep should try next. Every candidate still
+reaches a human, unfiltered.
+
+| Phase | Module | What it is |
+|---|---|---|
+| P1 — quality gates | `scripts/triage.py` | deterministic `HARD` / `WEAK` rule lists → `DROP` / `DEMOTE` / `PASS`, each hit carrying a rule name |
+| P2 — event log | `scripts/triage_events.py` | the job-independent learning store: append-only `events.jsonl`, `learned_buckets.json`, checksum sidecars |
+| P3 — text similarity | `scripts/triage.py` | bigram / TF-IDF cosine over prompt, filename and finding text (`intent_groups`) |
+| P4 — preference ranker | `scripts/triage_ranker.py` | pairwise logistic fit on what was shown vs what was picked; cold-starts on the hand order |
+| P5 — bucket bandit | `scripts/triage_ranker.py` | beta-Bernoulli Thompson sampling over bucket keys: which family to try next |
+
+### P1 — hard and weak gates (`scripts/triage.py`)
+
+`gate(candidate)` returns a verdict with a `disposition` of `DROP` (any single
+hard hit), `DEMOTE` (`weak_needed` weak hits) or `PASS`, plus the list of fired
+rule **names** and a bucket key — so a decision is explainable from the JSON
+alone. Hard rules today are `ARTWORK_LOST`, `SILHOUETTE_LOST`, `GLOW_AREA_HIGH`,
+`COLOR_CAP_EXCEEDED` and `GEOMETRY_HARD_FAIL` (a hard geometry finding already
+recorded by Layer A/B); weak rules are `SPECKLE_HEAVY`, `COLORS_NEAR_CAP`,
+`LOW_LUMA_CONTRAST`, `NODE_OVERLOAD`, `BORDERLINE_FIDELITY`.
+
+**The defaults live in `triage.py`** (`TRIAGE_DEFAULTS`), not in the docs — they
+are the canonical values, and the optional `triage` block of `spec.json` is
+merged over them key by key. Neither `spec.json` nor `spec.example.json` ships a
+`triage` block today, so every job runs on the table below; a spec can retune the
+gate without editing the script.
+
+| key | default | gate it drives |
+|---|---|---|
+| `max_unique_colors` | `8` | hard — more unique colours than this drops the candidate |
+| `min_silhouette_iou` | `0.85` | hard — silhouette overlap below this drops |
+| `max_glow_area_pct` | `8` | hard — glow area past this share of the sheet drops |
+| `max_mae_art` | `8.0` | hard — artwork MAE past this (or the `artwork_lost` fidelity verdict) drops; also the weak ceiling below |
+| `borderline_mae_art` | `1.0` | weak — MAE between this and `max_mae_art` is a borderline hit |
+| `max_speckles` | `40` | weak — speckle count past this |
+| `min_luma_delta` | `12` | weak — luma separation below this |
+| `max_nodes_per_path` | `500` | weak — a path over this node budget (mirrors `geometry.max_nodes_per_path`, so the gate and Layer A cannot drift apart) |
+| `weak_needed` | `3` | how many weak hits demote a candidate |
+| `learn_min_jobs` | `2` | distinct jobs required before anything is fit (P4) |
+| `bucket_cap` | `2` | *declared, not yet read by a rule* — reserved for the bucket phases |
+| `learn_min_rejections` | `3` | *declared, not yet read by a rule* — reserved for the bucket phases |
+
+Every rule reads the candidate and returns `False` when a reading is *missing*, so
+"not measured" and "measured bad" never collapse into the same verdict. The
+observations Layer A/B does not record (`speckle_count`, `glow_area_pct`,
+`luma_delta`, `silhouette_iou`) arrive under `comparison.metrics`.
+
+The bucket key is `"{preset}|s{speckle_bin}|c{colour_bin}|{prompt_family}"`, with
+deliberately coarse bins (`SPECKLE_EDGES` 0/5/20/40, `COLOR_EDGES` 1/3/5/8) whose
+widest edge lines up with the corresponding default above. One human rejection of
+one candidate can therefore retire every candidate that shares the key.
+
+The same module holds the canonical-form and hash primitives: `canonical_svg`
+(attributes sorted, `id`s dropped, path data tokenised and rounded to 2 decimal
+places), `svg_sha` and `file_sha256`. They exist so a regenerate-and-reformat
+cycle hashes equal — a "have I already seen this file" aid, not a claim of
+semantic equivalence (the module docstring lists the caveats: child order is not
+sorted, `url(#…)` references dangle, namespaces are preserved as written).
+
+### P2 — the event log (`scripts/triage_events.py`)
+
+The record of what the pipeline SHOWED a human, and of what was learned from it,
+has to outlive the job: the artifact sweep deletes `06_run/<stem>/` when a job
+goes, so the store lives at a **job-independent** path resolved from the
+environment, never hardcoded (this repo is public):
+
+```
+PIPELINE_LEARNING_DIR   default: <repo>/06_run/_learning/
+```
+
+`06_run/_learning/` is the one subdirectory that deletion does **not** sweep,
+which is what makes "survives job deletion" true by construction.
+
+| file | shape |
+|---|---|
+| `events.jsonl` | append-only, one compact JSON object per line, **one line per candidate shown**; field order `t`, `job`, `svg_sha`, `event`, `pos`, `ranker`; the only event written today is `"shown"` and `ranker` is `null` |
+| `learned_buckets.json` | `version: 1`, `bucket_key -> {shown, chosen, rejected}` (the P2 counters) plus the P5 bandit's `successes` / `attempts`, `last_t` and `veto` |
+| `<artifact>.sha256.json` | the checksum sidecar `stamp_checksum` writes beside an artifact at creation time |
+
+`pos` is the **1-based** position in the order the candidate was actually
+presented in (`enumerate(candidates, 1)`) — the same scale the studio's own action
+rows use — so mere exposure is learnable later, not just the pick. Each append is
+a single `O_APPEND` write (atomic on POSIX, so concurrent workers cannot
+interleave half a line) plus an in-process lock.
+
+Everything here is **non-fatal by contract**: an unwritable learning directory
+degrades to "no event recorded", never to a failed stage.
+
+### P3 — text similarity (`triage.py`)
+
+`norm` / `grams` / `cosine` / `text_sim` plus a small pure-Python TF-IDF
+(`tfidf_vectors`, `tfidf_query`, `intent_groups`) for **prompts, filenames and
+finding text — never for SVG geometry**. Character bigrams (`GRAM_N = 2`), digits
+kept on purpose (dropping them would make `filter_speckle=8` and
+`filter_speckle=16` score as identical strings), vectors sparse and L2-normalised.
+`intent_groups` buckets near-duplicates at `INTENT_THRESHOLD = 0.8` as a
+**grouping aid, not a ranker**: any ordering it produces keeps every index
+visible, so the uncertain members of a group can still be seen and judged.
+
+### P4 — the learned preference ranker (`triage_ranker.py`)
+
+The training signal is the event log: a candidate that was shown and then starred
+/ picked / proofed is the positive label, a candidate shown and never acted on is
+the negative. A small **pairwise logistic** scorer is fit so that, for two
+candidates shown in the SAME job, the acted-on one scores higher.
+
+- **Cold start.** Until `learn_min_picks` distinct picks (default `COLD_START_PICKS
+  = 30`) across `learn_min_jobs` distinct jobs (default `2`) have been seen — and
+  at least one comparable pair exists — `rank` falls back to the pipeline's own
+  **hand order**: fewest hard gates failed, then fewest advisories, then artwork
+  MAE. Both knobs reach the fit through the spec's `triage` block. The model file
+  is still written, with `kind: "cold_start"` and the counts that justified the
+  fallback, so a reader can see *why* the pipeline is still on the hand order.
+- **Features** are readings the pipeline already computes: `hard`, `advisory`,
+  `node_count_max`, `mae_art`, `colours`, `speckles`, `bucket_speckle_bin`,
+  `bucket_colour_bin`, an intercept, and one one-hot feature per preset it saw.
+  Nothing is hand-scaled: the fit standardises with the training means it records.
+- **Fit** is deterministic full-batch gradient descent — 300 iterations, learning
+  rate 0.5, L2 0.01. Weights are keyed by feature name, in a fixed order.
+- **The anti-feedback rule.** A learner trained on what the pipeline showed only
+  ever re-presents its own opinion, so `rank` always keeps `n_random_slots`
+  (default `1`) non-greedy slots inside the visible window (the first `8`
+  positions). The slots are drawn from the 4 × slots candidates nearest the window
+  cut, seeded and reproducible. Nothing is dropped, filtered or hidden: the return
+  value is a permutation of the same candidates.
+- **The split is by JOB, never by candidate** — a job's candidates never straddle
+  the fit/holdout boundary, and a model is never fit on the candidates of one job
+  alone.
+- `score` records its own direction in the model (`higher_is_more_preferred`), so
+  no JSON consumer can read it backwards. Model: `learned_ranker.json`,
+  `version: 1`, `kind: cold_start | pairwise_logistic`.
+
+```bash
+.venv/bin/python scripts/triage_ranker.py --selftest   # deterministic self-check
+.venv/bin/python scripts/triage_ranker.py train        # fit + persist; prints kind and reason
+.venv/bin/python scripts/triage_ranker.py choose poster|s1|c0| bw|s2|c1|   # one bandit draw
+```
+
+### P5 — the bucket bandit (`triage_ranker.py`)
+
+A **beta-Bernoulli Thompson-sampling bandit over bucket keys**, answering one
+narrow question: *which parameter family should the sweep try next?* Per bucket it
+keeps `successes` / `attempts` and samples
+`Beta(1 + successes, 1 + attempts - successes)` with two stdlib `gammavariate`
+draws; the +1 prior keeps an untouched bucket fully explorable.
+
+- **`DEFAULT_EPSILON_EXPLORE = 0.1`** — with that probability it ignores the
+  sample and takes a uniform random live bucket (`mode: "explore"`).
+- **Staleness TTL = 30 days** (`BANDIT_TTL_SECONDS`): a bucket whose last outcome
+  is older than that is re-explored from the prior, so a stale preference cannot
+  pin the sweep for ever.
+- **Veto**: `set_veto` retires a bucket for good (`vetoed_buckets`), and a veto
+  list can also be passed per call. Every bucket vetoed or absent ⇒
+  `choose_bucket` returns `None`.
+- `bucket_decision` is the explainable form: the chosen bucket, the mode
+  (`explore` / `exploit` / `none`), the reason, the sampled thetas, and the live /
+  vetoed / expired buckets.
+
+It chooses a **parameter family** — never a candidate and never a winner — and the
+default draw is OS-seeded (pass a seeded `rng` to reproduce one).
+
+### What is wired, and what is still a seam
+
+| phase | reachable from | pipeline call site |
+|---|---|---|
+| P1 gates | `triage.gate(...)`, the tests | **none yet** — the comparison stage is the intended caller |
+| P2 log | `compare_candidates.py` writes the `shown` events (at the point its ordered list becomes what a human sees); `trace_sweep.py` stamps each `candidate_NN.svg` checksum | **wired** |
+| P3 text sim | the `triage.py` functions, the tests | none yet |
+| P4 ranker | `triage_ranker.py train` / `rank(...)` | **none yet** — the comparison stage, once the action lines carry metrics |
+| P5 bandit | `triage_ranker.py choose` / `choose_bucket(...)` | **none yet** — the sweep's parameter choice is the intended seat; nothing in `trace_sweep.py` changed for it |
+
+The prep / proof / PDF / candidate checksum stamps beyond the traced candidate are
+listed as explicit seams in the `triage_events.py` docstring, not wired. So the
+honest summary is: a tested, CLI-reachable library sitting beside the pipeline,
+with the event log already being written — not a layer that changes which
+candidate the pipeline produces or which one a human picks. Tests:
+`tests/test_triage.py`, `tests/test_triage_events.py`, `tests/test_triage_ranker.py`.
+
+---
+
+## Housekeeping: the disk gate and the orphan sweep
+
+Two scripts that keep a long-lived install from filling up or drifting. Neither
+is part of the artwork flow, and both are wired into the places that matter.
+
+**`scripts/disk_check.py` — the disk-capacity gate.** Measures the filesystem
+holding a path (`disk_check.py [path]`, default `.`) with `shutil.disk_usage`:
+
+| free space | result |
+|---|---|
+| ≥ 2 GiB | exit **0**, silent |
+| < 2 GiB | exit **0** + a `disk check: WARNING` line on stderr |
+| < 1 GiB | exit **2** + `disk check: FAILED` — the caller must refuse to run |
+
+Both `front_pipeline.sh` and `pipeline.sh` call it on the project root *before any
+stage runs*, so a full disk refuses the job up front instead of failing it halfway
+through with a half-written sweep on it. The runner enforces the same 1 GiB floor
+itself before it builds a job's 7z archive (`MIN_ARCHIVE_FREE`) and answers `507`
+rather than archiving.
+
+```bash
+.venv/bin/python scripts/disk_check.py .        # exit 2 refuses the run
+```
+
+**`scripts/orphan_sweep.py` — the hourly artifact sweep.** A studio job delete
+removes the runner's job directory only. Everything the pipeline wrote into the
+shared trees is keyed by the **input stem**, not by the job id, so it survives the
+delete — as does the studio's own copy of the upload (measured on a live box: 5
+orphan stems held ~215 MiB of traces and validation work, plus 14 orphan uploads,
+~25 MiB). This script plans those leftovers and deletes only the ones a wrapper
+has proved dead.
+
+It is deliberately **host-agnostic** (this repo is public): it never queries
+anything. The caller supplies the authoritative live-stem list — one per line or a
+JSON list — and the host-local wrapper that knows where the box keeps its job
+database produces it. The hourly timer belongs to that wrapper; it is not in this
+repo, so nothing here runs on a schedule by itself.
+
+```bash
+.venv/bin/python scripts/orphan_sweep.py --live-stems-file live.txt \
+    --root . --uploads-dir /data/uploads --grace-hours 24 --json-out plan.json
+# dry run by default: it prints the plan and deletes nothing.
+# add --apply to delete, --keep <stem> to protect one more stem (repeatable).
+```
+
+Windows: `--root` sweeps `01_prepped/`, `02_traced/` and `04_validated/`;
+`--uploads-dir` sweeps source copies whose stem is not live; `--runner-root`
+(together with `--runner-url`) sweeps runner job directories the runner itself
+answers `404` for.
+
+Safety properties, in the script's own order of importance:
+
+- it **refuses to run on an empty live set** — an empty list would mark every
+  artifact an orphan, so a failed query aborts the sweep rather than widening it
+  (exit 2, nothing deleted);
+- deletion needs an explicit `--apply`; without it the run is a dry run;
+- anything modified inside `--grace-hours` (default `24`) is kept, so an upload
+  just dropped on the new-job form is never swept;
+- a stem matches as `name == stem` or `name.startswith(stem + ".")`, so stem `a`
+  never matches `ab.svg`, and only a whitelist of suffixes the pipeline actually
+  writes is stem-matched — `04_validated/candidate_01.layer_a.txt` is
+  candidate-keyed, so it is reported as not-stem-keyed and left alone;
+- symlinks are never followed (a symlinked entry is skipped and reported), so the
+  sweep cannot be talked into deleting outside the tree it was given;
+- the whole plan is aborted if it exceeds `--max-delete` (default `2000`);
+- `00-example` is always kept — it is tracked reference output, and deleting it
+  would dirty the working tree.
+
+Exit codes: **0** success · **2** guard refusal (no window given, a bad
+`--runner-root`/`--runner-url` pair, an unreadable or empty live-stem list, or a
+plan over `--max-delete`) · **3** at least one deletion failed. Tests:
+`tests/test_orphan_sweep.py`.
+
+---
+
 ## Palette variations (`scripts/palette_variants.py`)
 
 The Chopshop-Aided-Design layer. Takes a finished trace — a validated proof, a
@@ -345,6 +639,11 @@ snapped candidate, or the SVG a `05_final/` manifest was built from — and
 re-colours it onto each palette in `scripts/palettes.json`. **The CAD structure
 is never touched**: no path, node, `viewBox` or dimension changes, only
 `fill` / `stroke` / `stop-color`. Same geometry, new colour vectors.
+
+**It is standalone and unwired.** No stage, no spec key and no pipeline call
+reaches this bench: you run it by hand (or from your own script), and the rest of
+the repo does not depend on it. The only other place it is used is the runner's
+recolour seam, which is itself unbuilt — see `docs/runner-http-contract.md`.
 
 ```bash
 .venv/bin/python scripts/palette_variants.py --list
@@ -501,7 +800,9 @@ engine.
 .venv/bin/pyflakes scripts/*.py validate_svg.py preflight.py  # lint
 ```
 
-435 tests pass. The suite uses synthetic images generated in-test (Pillow),
+The suite count is deliberately not repeated here: **`CONTEXT.md` is its single
+canonical home** (currently 590 tests, all passing). The suite uses synthetic
+images generated in-test (Pillow),
 never the real artwork, so it runs anywhere without the `00_source/` batch.
 Tests that need system tools (inkscape, gs, qpdf, poppler-utils) skip
 cleanly when those are absent — a fresh checkout without tools won't look
@@ -516,8 +817,14 @@ broken.
 - `docs/HOWTO-print-check.md` — running and reading the print check: the garment
   setting, every rule and its severity, the measurement caveats, and the stage 3
   helpers.
+- `docs/runner-http-contract.md` — the HTTP surface `runner.py` exposes to
+  Chopshop Studio: every route, the job/validation lifecycle, the archive and
+  file proxy, the disk gate, and what is in-memory. Start here if you are writing
+  a client rather than running the pipeline.
 - `scripts/TRACE_STAGE.md` — the trace stage in detail (sweep, fidelity metric,
-  parallelism).
+  parallelism, and where the triage layer attaches).
+- `CONTEXT.md` — the working state: what is in flight, the caveats that are not
+  obvious from the code, and the **canonical test count**.
 - `scripts/NODE_REDUCTION.md` — why no external tool was adopted for
   `geometry_overload`: byte optimizers do not reduce nodes, svg-simplifier
   crashes on 40% of real paths, Inkscape's default threshold costs 18% of the

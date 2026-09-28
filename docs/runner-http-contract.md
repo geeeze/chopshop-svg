@@ -1,10 +1,16 @@
 # Runner HTTP contract (`runner.py`)
 
-`runner.py` is the pure-stdlib HTTP server that wraps the pipeline and exposes
-it to Chopshop Studio. It is the operator-facing surface: Studio does not shell
-the pipeline scripts itself, it POSTs jobs to the runner and reads results back.
-The pipeline image and the runner are separate deliverables — a built image
-proves the pipeline runs; it does not prove a runner is listening on the port.
+Canonical copy. `runner.py` is the pure-stdlib HTTP server that wraps the
+pipeline and exposes it to Chopshop Studio. It is the operator-facing surface:
+Studio does not shell the pipeline scripts itself, it POSTs jobs to the runner
+and reads results back. The pipeline image and the runner are separate
+deliverables — a built image proves the pipeline runs; it does not prove a runner
+is listening on the port.
+
+A second copy of this contract lives in-repo as
+`skills/chopshop-svg-pipeline/references/runner-http-contract.md` (the
+repo-owned agent skill); this file is the one linked from `README.md`. If you
+change the runner's routes, change both.
 
 It serves `RUNNER_PORT` (default `8787`) bound to `RUNNER_BIND` (default
 `0.0.0.0`; bind a real deployment to a private address).
@@ -29,8 +35,8 @@ A missing or wrong token answers `401 {"error": "unauthorized"}`.
 | POST | `/validations` | create a validation (print check) for a chosen candidate; `202 {id}` |
 | GET | `/validations/:id` | `{id, state, manifest, log, error}` |
 | POST | `/validations/:id/jev` | optional Jev add-on (see below) |
-| POST | `/recolour` | **unbuilt seam** (no consumer) — rewrite one candidate SVG's paint from an explicit `{src: dst}` map, return the SVG bytes inline |
-| POST | `/recolour/colours` | **unbuilt seam** (no consumer) — list one SVG's distinct declared colours, most-used first |
+| POST | `/recolour` | **unbuilt seam** — rewrite one candidate SVG's paint from an explicit `{src: dst}` map, return the SVG bytes inline |
+| POST | `/recolour/colours` | **unbuilt seam** — list one SVG's distinct declared colours, most-used first |
 
 Anything else answers `404 {"error": "unknown route"}`.
 
@@ -91,21 +97,33 @@ this proxy and check the status before claiming it serves.
 
 ## Recolour seam — implemented, **unbuilt** (no consumer)
 
-`POST /recolour` and `POST /recolour/colours` exist and are unit-tested
-(`tests/test_runner.py`), but **no studio consumer calls them** — the
-colour-cycling preview they were written for was never built. Treat them as a
-seam, not a live feature. `/recolour` takes `{job_id, file, map}` (both sides of
-`map` must be plain `#rrggbb`) and returns the recoloured SVG inline;
-`/recolour/colours` returns `{file, colours}`, most-used first. Paint only:
-`fill` / `stroke` / `stop-color` through the CSS cascade, geometry untouched.
-Full contract: `docs/runner-http-contract.md` in the repo.
+`POST /recolour` and `POST /recolour/colours` **exist and are unit-tested**
+(`tests/test_runner.py`), but **nothing calls them**: the studio's
+"cycle colours" preview they were written for was never built, so there is no UI
+behind these routes. Treat them as an unbuilt seam, not a live feature — do not
+document studio behaviour that assumes them, and do not change or remove them
+without checking the studio side first.
+
+What they do, if you do call them: `/recolour` takes
+`{job_id, file, map}` where `map` is an explicit `{source: target}` map and both
+sides must be a plain `#rrggbb` (a bad pair is `400`, never silently dropped);
+it returns the recoloured SVG inline with `Content-Type: image/svg+xml` — no
+raster round-trip. `/recolour/colours` takes `{job_id, file}` and returns
+`{file, colours}`, the distinct declared colours most-used first, so a picker
+can offer "replace THIS colour". Both rewrite paint only: `fill` / `stroke` /
+`stop-color` through the CSS cascade, with geometry, node count, `viewBox` and
+dimensions untouched by construction (the work is
+`palette_variants.apply_mapping`, imported lazily so the runner's startup stays
+light). Errors: `400` for a missing `job_id`/`file` or a bad map, `404` when the
+artifact is not resolvable, `500` when a rewrite fails.
 
 ## Disk gate
 
-`scripts/disk_check.py` warns below 2 GiB free and refuses (exit 2) below 1 GiB.
-It is wired into `front_pipeline.sh` and `pipeline.sh` before any stage runs
-(README → "Housekeeping" has the exit codes and the argument). The runner enforces
-the same 1 GiB floor itself before building an archive (`MIN_ARCHIVE_FREE`, `507`).
+The runner refuses to archive below 1 GiB free (`MIN_ARCHIVE_FREE`) and answers
+`507 insufficient disk to archive`. The same 1 GiB floor, with a 2 GiB warning
+band above it, is the pipeline's `scripts/disk_check.py`, called by
+`front_pipeline.sh` and `pipeline.sh` before any stage runs — see the README's
+"Housekeeping" section for the exit codes and wiring.
 
 ## State is mostly in-memory
 

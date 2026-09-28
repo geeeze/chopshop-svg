@@ -55,6 +55,7 @@ by stretching.
 | `compare_candidates.py` | Run every candidate through Layer A and Layer B, then write `04_validated/<stem>.comparison.md` (table) and `.comparison.json` (machine-readable). Sorts by fewest hard gates failed, then fewest advisories. Nothing more. Also, when a source raster is resolvable, renders each candidate back with Inkscape and diffes it against the source for a **pixel-fidelity metric** (see below). |
 | `pick_finish.py` | Semi-interactive tail: print a menu of candidates, wait for the user to pick up to 3, run `pipeline.sh` on each, loop. Driven by `front_pipeline.sh --loop`. |
 | `front_pipeline.sh` | Orchestrator: prep → sweep → compare, then reports the outcome (or, with `--loop`, hands off to `pick_finish.py`). Exit 0 = a candidate passed both gates, 1 = none passed, 2 = a step failed. |
+| `triage.py`, `triage_events.py`, `triage_ranker.py` | The candidate-triage layer on top of the sweep and the comparison: P1 quality gates, P2 the job-independent event log, P3 text similarity, P4 the learned preference ranker, P5 the bucket bandit. Only the event log is called by this stage today. See "Candidate triage + learning" below. |
 
 Shared helpers live in `front_common.py` (sha256, tool-version stamping, the
 default `print.*` values).
@@ -256,6 +257,25 @@ Two notes on the mechanism, both handled for you:
 Observed speedup (24-core box, VTracer Python API): a 12-candidate sweep went
 ~3.4s → ~0.9s on a 1500×1500 source; the win grows with source size and colour
 complexity, where tracing (and the Inkscape fidelity render) dominates.
+
+## Candidate triage + learning (P1–P5)
+
+Sitting on top of this stage is a five-phase triage layer in three stdlib-only
+modules: **P1** quality gates (`scripts/triage.py`, `HARD`/`WEAK` rules →
+`DROP`/`DEMOTE`/`PASS`, defaults in `TRIAGE_DEFAULTS`), **P2** the
+job-independent event log (`scripts/triage_events.py`, `PIPELINE_LEARNING_DIR`,
+default `06_run/_learning/`), **P3** bigram/TF-IDF text similarity,
+**P4** a learned pairwise ranker and **P5** a beta-Bernoulli bucket bandit (all
+in `scripts/triage_ranker.py`). It never picks a winner.
+
+Only the P2 log is wired into this stage today: `compare_candidates.py` writes
+one `shown` event per candidate, in the order it presents them (1-based `pos`),
+at the point that order becomes what a human sees, and the trace worker stamps
+each `candidate_NN.svg` with its checksum sidecar. The gate, the ranker and the
+bandit have no call site in the trace stage yet — deliberate seams, and the
+sweep's parameter choice is where the bandit is meant to sit (nothing in
+`trace_sweep.py` changes for it). Full description, defaults table and the
+wired-vs-seam matrix: `../README.md` → "Candidate triage + learning stack".
 
 ## Known caveats
 

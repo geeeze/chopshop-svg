@@ -471,7 +471,15 @@ def guarded(fn, item: dict) -> None:
 
 # ----------------------------------------------------------- recolour seam --
 #
-# The studio's "cycle colours" preview recolours a candidate SVG without a
+# UNBUILT SEAM (2026-09-28). The two routes below -- POST /recolour and
+# POST /recolour/colours -- are implemented and unit-tested, but NO studio
+# consumer calls them: the "cycle colours" preview they were written for was
+# never built, so nothing in the product is behind them. Do not read them as a
+# live feature, do not document UI behaviour that assumes them, and do not
+# remove them without checking the studio side first. Documented as unbuilt in
+# docs/runner-http-contract.md and CONTEXT.md.
+#
+# What the seam does, if you do call it: recolours a candidate SVG without a
 # raster round-trip: only fill / stroke / stop-color change, geometry, node
 # count and dimensions are untouched. The actual rewrite is palette_variants'
 # tested apply_mapping (scripts/palette_variants.py); this module only exposes
@@ -749,8 +757,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if len(parts) == 1 and parts[0] == "recolour":
             # Recolour one candidate SVG by an explicit {source: target} map and
-            # return the bytes inline, so the studio/browser renders the vector
-            # directly — the preview never rasterises. Geometry is untouched.
+            # return the bytes inline, so a caller (unbuilt seam: no studio
+            # consumer today) can render the vector directly — the preview never
+            # rasterises. Geometry is untouched.
             job = JOBS.get(str(body.get("job_id") or ""))
             name = str(body.get("file") or "")
             if not job or not re.fullmatch(r"[\w.\-]+", name):
@@ -779,7 +788,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if len(parts) == 2 and parts[0] == "recolour" and parts[1] == "colours":
             # List the distinct declared colours of one SVG, most-used first,
-            # so the studio's colour-cycling picker knows what it can replace.
+            # so a colour-cycling picker knows what it can replace (unbuilt
+            # seam: no studio consumer calls this today).
             job = JOBS.get(str(body.get("job_id") or ""))
             name = str(body.get("file") or "")
             if not job or not re.fullmatch(r"[\w.\-]+", name):

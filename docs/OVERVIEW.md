@@ -104,6 +104,14 @@ a hard finding**; advisories are reported and do not fail the run.
 | 5. Creative review | you / the printer | **manual** |
 | 6. Export & handoff | `pipeline.sh` | **built** |
 
+The trace stage also carries a **candidate-triage / learning layer** in
+`scripts/triage*.py`: P1 quality gates, P2 a job-independent event log
+(`PIPELINE_LEARNING_DIR`, default `06_run/_learning/`), P3 text similarity, P4 a
+learned pairwise ranker and P5 a beta-Bernoulli bucket bandit. It never picks a
+winner, and today only its event log is called by the pipeline — the gates, the
+ranker and the bandit are documented seams. See the README's "Candidate triage +
+learning stack".
+
 ---
 
 ## What you need to provide
@@ -237,7 +245,8 @@ against 0.00–0.20% for every flat file in the batch.
 
 ## Current state — what's verified
 
-**369 tests, all passing** (`pytest tests/`), lint clean. The print check:
+**All tests passing** (`pytest tests/`), lint clean. The count is not repeated
+here: `../CONTEXT.md` is its single canonical home. The print check:
 
 | suite | tests | covers |
 |---|---|---|
@@ -337,7 +346,7 @@ SPEC=other.json ./pipeline.sh x.svg            # different spec
 
 # the batch
 .venv/bin/python scripts/run_batch.py          # → 04_validated/batch_results.json
-.venv/bin/python -m pytest tests/ -q           # 369 tests
+.venv/bin/python -m pytest tests/ -q           # test count: see ../CONTEXT.md
 
 # open the artwork by hand
 inkscape 00_source/art.svg
@@ -380,7 +389,11 @@ scripts/run_batch.py       batch runner
 scripts/prep_raster.py     trace stage — raster prep (check-first)
 scripts/trace_sweep.py     trace stage — VTracer candidate sweep
 scripts/compare_candidates.py  trace stage — Layer A/B + fidelity report
-tests/                     369 tests
+scripts/triage.py          trace stage — P1 gates, bucket key, text similarity
+scripts/triage_events.py   trace stage — P2 job-independent event log
+scripts/triage_ranker.py   trace stage — P4 preference ranker, P5 bucket bandit
+docs/runner-http-contract.md  the runner's HTTP surface (jobs, files, validations)
+tests/                     pytest suite (count: see ../CONTEXT.md)
 00_source/                 input artwork (+ the test batch)
 01_prepped/ 02_traced/ 03_cleaned/   stages 1–3 (trace stage writes 01/02)
 04_validated/              Layer A output + batch_results.json + comparison reports

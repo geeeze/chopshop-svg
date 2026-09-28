@@ -10,9 +10,10 @@ uploads (~25 MiB).
 
 This script is deliberately HOST-AGNOSTIC (this repo is public): it never asks
 the database anything. The caller supplies the authoritative list of live stems
--- one per line, or a JSON list -- and the wrapper that knows where this box
-keeps its Rails app produces it. See `references/orphan-sweep.md` in the skill
-or the host-local wrapper for the Rails one-liner.
+-- one per line, or a JSON list -- and the host-local wrapper that knows where
+this box keeps its job database produces it. That wrapper (and the hourly timer
+that runs it) is not part of this repo; see the README's "Housekeeping" section
+for the wiring, the arguments and the exit codes.
 
 Safety properties, in order of importance:
 
