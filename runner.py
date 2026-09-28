@@ -21,6 +21,7 @@ import traceback
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs
 
 PROJECT = Path(os.environ.get("PIPELINE_ROOT", "/app"))
 # The repo root, resolved from this file — not PIPELINE_ROOT — so the recolour
@@ -426,6 +427,178 @@ def run_front(job: dict) -> None:
                 prep_expand=expand, state="done")
 
 
+# ------------------------------------------------------- proof dataset seam --
+#
+# The opt-in tail of the print check: "similar copies of the selected proof"
+# (mirrored / rotated / colour-shifted) emitted as a raster+vector PAIR each,
+# plus a manifest and a contact sheet, packaged so an operator can see what an
+# augmented training set for this pipeline would look like.
+#
+# The stage lives in scripts/proof_variants.py and is invoked HERE rather than
+# from pipeline.sh: AGENTS.md freezes pipeline.sh (and validate_svg.py /
+# preflight.py / snap_colors.py) as the tested print check, so the wiring point
+# is the runner, after the shell script has already produced the proof.  The
+# stage is additive -- it reads the proof, the selected SVG and the manifest and
+# writes only into its own `<stem>.dataset/` directory and three flat copies.
+#
+# Imported lazily, exactly like the recolour seam below, so starting the runner
+# never pulls in PIL/lxml.
+# dataset-seam
+
+DATASET_SUFFIX = ".dataset"
+
+
+def _proof_variants():
+    import sys as _sys
+    _scripts = HERE / "scripts"
+    if str(_scripts) not in _sys.path:
+        _sys.path.insert(0, str(_scripts))
+    import proof_variants  # noqa: F401  (imports PIL + lxml + palette_variants)
+    return proof_variants
+
+
+def variants_request(spec: dict) -> tuple:
+    """(enabled, transforms) for ``validation.variants`` in the spec.
+
+    Absent, false or an object without ``enabled`` is the DEFAULT and produces
+    nothing new: a job that did not ask for the stage must not look like a job
+    whose stage broke.  ``true`` means the whole vocabulary; an object
+    ``{"enabled": true, "transforms": [...]}`` selects a subset.  Any other
+    shape is a caller error and is raised as one.
+    """
+    raw = (spec.get("validation") or {}).get("variants")
+    if raw is True:
+        return True, None
+    if raw is None or raw is False:
+        return False, None
+    if isinstance(raw, dict):
+        return bool(raw.get("enabled")), raw.get("transforms")
+    raise ValueError("validation.variants must be true/false or an object "
+                     "{\"enabled\": bool, \"transforms\": [...]}, got %r" % (raw,))
+
+
+def dataset_stems(job: dict) -> list:
+    """Candidate stems that HAVE a dataset on disk for this job, sorted.
+
+    Read off the filesystem, not out of VALIDATIONS: validations are in-memory
+    only, so after a runner restart the datasets are still on the bind mount and
+    their archives must still be built.
+    """
+    root = Path(job["dir"])
+    if not root.is_dir():
+        return []
+    return sorted(entry.name[: -len(DATASET_SUFFIX)] for entry in root.iterdir()
+                  if entry.is_dir() and entry.name.endswith(DATASET_SUFFIX))
+
+
+def dataset_file(dataset_dir: Path, relative: str) -> Path:
+    """Resolve one file inside a job's ``<stem>.dataset``; ValueError if it escapes.
+
+    Containment is checked on the RESOLVED path, so a ``..`` segment, an
+    absolute name, a backslash or a symlink pointing out of the tree is refused
+    rather than normalised into something that looks valid.  This nested form
+    needs its own gate: the flat ``/files/`` route's ``[\\w.\\-]+`` name check
+    cannot see a second path segment, and the dataset is the one place a request
+    contains a slash.
+    """
+    if not relative or "\\" in relative or "\x00" in relative:
+        raise ValueError("invalid dataset file name")
+    segments = relative.split("/")
+    if any(segment in ("", ".", "..") for segment in segments):
+        raise ValueError("invalid dataset file name")
+    root = dataset_dir.resolve()
+    candidate = (root / relative).resolve()
+    if candidate != root and root not in candidate.parents:
+        raise ValueError("path escapes the dataset directory")
+    return candidate
+
+
+def build_dataset_archive(dataset_dir: Path, out_path: Path) -> Path | None:
+    """7z one dataset directory; returns the archive path or None.
+
+    The same optional-tool rule as build_archive: no 7z on PATH (or a failure)
+    returns None so the route can answer 500, never a half-written download.
+    """
+    seven = shutil.which("7z") or shutil.which("7za") or shutil.which("7zr")
+    if not seven:
+        return None
+    cmd = [seven, "a", "-t7z", "-mx=5", "-y", "-bd", str(out_path),
+           str(dataset_dir)]
+    try:
+        proc = subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, timeout=300)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0 or not out_path.is_file():
+        return None
+    return out_path
+
+
+def build_proof_dataset(job: dict, validation: dict, manifest: dict,
+                        candidate: str, spec_path: Path):
+    """Run the opt-in dataset stage; return the manifest's ``dataset`` value.
+
+    None means the spec did not ask for it, which is the default.  Anything else
+    raises, and run_back records that as a NOTE on the manifest instead of
+    failing the validation: the proof is the deliverable and it already
+    succeeded by the time this runs.
+    """
+    spec: dict = {}
+    if spec_path.is_file():
+        try:
+            loaded = json.loads(spec_path.read_text(encoding="utf-8"))
+            spec = loaded if isinstance(loaded, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            spec = {}
+    enabled, requested = variants_request(spec)
+    if not enabled:
+        return None
+
+    pv = _proof_variants()
+    plan = pv.variant_plan(requested)          # refuses an unknown name outright
+    if not plan:
+        _append_log(validation, "dataset: variants are enabled but no transforms "
+                                "were selected; nothing derived")
+        return None
+
+    job_dir = Path(job["dir"])
+    candidate_stem = Path(candidate).stem
+    out_dir = job_dir / f"{candidate_stem}{DATASET_SUFFIX}"
+    # Provenance points at the manifest ON DISK (run_back has already copied
+    # it): a reader of dataset.json can open the file it was derived from. The
+    # in-memory dict is the fallback for a job directory without one.
+    manifest_file = job_dir / f"{candidate_stem}.manifest.json"
+    description = pv.build_dataset(
+        job_dir / f"{candidate_stem}.proof.png", job_dir / candidate, out_dir,
+        transforms=plan,
+        manifest=manifest_file if manifest_file.is_file() else manifest,
+        stem=candidate_stem)
+
+    # The three FLAT names sit at the job root so the existing artifact_path
+    # resolution serves them without a nested route; the variant files under
+    # raster/ and vector/ are served by the four-segment /files/ route.
+    shutil.copy2(out_dir / "dataset.json",
+                 job_dir / f"{candidate_stem}{DATASET_SUFFIX}.json")
+    shutil.copy2(out_dir / "dataset.md",
+                 job_dir / f"{candidate_stem}{DATASET_SUFFIX}.md")
+    pv.contact_sheet(
+        [(out_dir / "raster" / entry["raster"]["name"], entry["transform"])
+         for entry in description["files"]],
+        job_dir / description["sheet"])
+
+    _append_log(validation, "dataset: %d variants (%s) -> %s"
+                % (description["count"], ", ".join(description["transforms"]),
+                   description["dir"]))
+    return {
+        "dir": description["dir"],
+        "manifest": description["manifest"],
+        "sheet": description["sheet"],
+        "package": description["package"],
+        "count": description["count"],
+        "transforms": description["transforms"],
+    }
+
+
 def run_back(validation: dict) -> None:
     job = JOBS[validation["job_id"]]
     with PIPELINE_LOCK:
@@ -453,6 +626,24 @@ def run_back(validation: dict) -> None:
         shutil.copy2(output_dir / pdf_name, job_dir / pdf_name)
         manifest["proof"] = proof_name
         manifest["print_pdf"] = pdf_name
+        # Opt-in dataset stage (spec: validation.variants).  It runs LAST and it
+        # is additive: the proof, the print PDF, the manifest and the selected
+        # SVG are never edited or replaced by it.  A failure here is recorded as
+        # a NOTE on the manifest and the validation still settles to done -- the
+        # proof is the deliverable and it already succeeded, so a dataset that
+        # could not be derived must not turn a good proof into a failed job.
+        # dataset-seam
+        try:
+            dataset = build_proof_dataset(job, validation, manifest, candidate,
+                                          spec_path)
+            if dataset:
+                manifest["dataset"] = dataset
+        except Exception as exc:                      # noqa: BLE001 - report it
+            note = "dataset stage failed: %s: %s" % (type(exc).__name__, exc)
+            if not isinstance(manifest.get("notes"), list):
+                manifest["notes"] = []
+            manifest["notes"].append(note)
+            _append_log(validation, note)
         with STATE_LOCK:
             validation.update(manifest=manifest, state="done")
 
@@ -578,7 +769,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         content_types = {".svg": "image/svg+xml", ".png": "image/png",
                          ".pdf": "application/pdf", ".json": "application/json",
-                         ".7z": "application/x-7z-compressed"}
+                         ".7z": "application/x-7z-compressed",
+                         # A dataset's notes are text: served as an unknown
+                         # binary they are offered as a download or rendered as
+                         # nothing. `text/markdown` lets a browser show them,
+                         # which is the whole point of shipping a .md beside the
+                         # JSON.
+                         ".md": "text/markdown; charset=utf-8"}
         data = path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", content_types.get(path.suffix, "application/octet-stream"))
@@ -592,9 +789,35 @@ class Handler(BaseHTTPRequestHandler):
         if not self.authorized():
             self.json_response(401, {"error": "unauthorized"})
             return
-        parts = [part for part in self.path.split("/") if part]
-        if self.path == "/health":
+        route, _, query = self.path.partition("?")
+        parts = [part for part in route.split("/") if part]
+        if route == "/health":
             self.json_response(200, health_payload())
+            return
+        if len(parts) >= 4 and parts[0] == "files" \
+                and parts[2].endswith(DATASET_SUFFIX):
+            # A dataset's variant files are one level deeper than the flat
+            # /files/ route can name: raster/<transform>.png and
+            # vector/<transform>.svg live under <stem>.dataset/, so this route
+            # carries a SECOND path segment.  Containment is re-checked on the
+            # resolved path (dataset_file) because the flat route's name regex
+            # cannot see across that segment, and a dataset is the one artifact
+            # whose request may contain a slash.
+            job = JOBS.get(parts[1])
+            if not job:
+                self.json_response(404, {"error": "no such job"})
+                return
+            stem = parts[2][: -len(DATASET_SUFFIX)]
+            if stem not in dataset_stems(job):
+                self.json_response(404, {"error": "no such dataset"})
+                return
+            relative = "/".join(parts[3:])
+            try:
+                path = dataset_file(Path(job["dir"]) / parts[2], relative)
+            except ValueError as exc:
+                self.json_response(400, {"error": str(exc)})
+                return
+            self.serve_file(path, Path(relative).name)
             return
         if len(parts) >= 3 and parts[0] == "files":
             job = JOBS.get(parts[1])
@@ -642,6 +865,59 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 self.serve_file(archive, f"{job.get('stem') or parts[1]}.7z", attachment=True)
+            finally:
+                archive.unlink(missing_ok=True)
+            return
+        if len(parts) == 3 and parts[0] == "jobs" and parts[2] == "dataset":
+            # 7z ONE <candidate_stem>.dataset on demand and stream it; the
+            # whole-job route above is unchanged and this one mirrors it
+            # exactly: 409 unless the job is done, 507 below the free-disk
+            # floor, 500 when 7z is unavailable, and the temporary archive is
+            # unlinked in a finally so nothing accumulates beside the job.
+            job = JOBS.get(parts[1])
+            if not job:
+                self.json_response(404, {"error": "no such job"})
+                return
+            if job["state"] != "done":
+                self.json_response(409, {"error": f"job not done ({job['state']})"})
+                return
+            job_dir = Path(job["dir"])
+            if not job_dir.is_dir():
+                self.json_response(404, {"error": "job dir missing"})
+                return
+            stems = dataset_stems(job)
+            wanted = (parse_qs(query).get("candidate") or [""])[0]
+            if wanted:
+                if not re.fullmatch(r"[\w.\-]+", wanted):
+                    self.json_response(400, {"error": "invalid candidate name"})
+                    return
+                stem = Path(wanted).stem
+            elif len(stems) == 1:
+                # The common case: one validation, one dataset, no need for the
+                # caller to name it.  Ambiguity is a 400, not a guess.
+                stem = stems[0]
+            elif not stems:
+                self.json_response(404, {"error": "no dataset for this job"})
+                return
+            else:
+                self.json_response(400, {"error": "candidate is required: this "
+                                        "job has %d datasets" % len(stems)})
+                return
+            if stem not in stems:
+                self.json_response(404, {"error": f"no dataset for {stem}"})
+                return
+            if free_bytes(job_dir) < MIN_ARCHIVE_FREE:
+                self.json_response(507, {"error": "insufficient disk to archive"})
+                return
+            archive = build_dataset_archive(
+                job_dir / f"{stem}{DATASET_SUFFIX}",
+                job_dir.parent / f"{stem}{DATASET_SUFFIX}.7z")
+            if archive is None:
+                self.json_response(500, {"error": "7z unavailable or failed"})
+                return
+            try:
+                self.serve_file(archive, f"{stem}{DATASET_SUFFIX}.7z",
+                                attachment=True)
             finally:
                 archive.unlink(missing_ok=True)
             return

@@ -196,6 +196,15 @@ Layer A result on its own. Per-run copies are kept, so consecutive runs never
 overwrite each other. The file table and the per-run naming are in
 `HOWTO-print-check.md`.
 
+With `"validation": {"variants": true}` in the spec the runner's print check
+also writes the **dataset set**: a deterministic family of similar copies of
+that one proof — mirrored, rotated and colour-shifted — as a raster+vector pair
+each, under `<candidate>.dataset/` (plus `dataset.json`, `dataset.md` and a
+labelled contact sheet, and the three flat names at the job root that the
+`/files/` proxy serves). It is a derived set, not a comparison: every requested
+copy is emitted and nothing is ranked. OFF by default, and a failure in that
+stage is recorded as a note on the manifest rather than failing the proof.
+
 ---
 
 ## What fails a run, and what doesn't
@@ -257,7 +266,11 @@ here: `../CONTEXT.md` is its single canonical home. The print check:
 
 The trace stage adds its own suites (prep, trace sweep, comparison, pick/loop,
 palette variants, run record, requirements closeout); see
-`../scripts/TRACE_STAGE.md` and `../README.md` for that coverage.
+`../scripts/TRACE_STAGE.md` and `../README.md` for that coverage. The print
+check's opt-in **dataset set** (`validation.variants`) carries two suites of its
+own: `test_proof_variants.py` (the stage — vocabulary, determinism, both halves,
+the package, the CLI) and `test_runner_dataset.py` (the opt-in gate, the note on
+a stage failure, and the two new routes over a live HTTP listener).
 
 **Regression guards for the two measurement traps**, with synthetic fixtures so
 they can't silently return:

@@ -31,12 +31,24 @@ GPT/Astra) chooses. Then you run the print check on the chosen SVG.
             │
     ┌───────▼────────┐
     │ ./pipeline.sh  │   the PRINT CHECK: validate + preflight the chosen SVG
-    └────────────────┘
+    └───────┬────────┘
+            │
+    ┌───────▼────────┐   scripts/proof_variants.py   (opt-in: validation.variants)
+    │ <candidate>.   │   deterministic similar copies of that one proof
+    │  dataset/      │   raster/<transform>.png + vector/<transform>.svg,
+    └────────────────┘   dataset.json/md + a contact sheet
 ```
 
 `front_pipeline.sh` chains the first three stages. It **never** calls
 `pipeline.sh`; the two stages stay separate so you always make the choice in
 between.
+
+The dataset stage at the bottom is the one thing that runs *after* the print
+check, and it is opt-in (`validation.variants`, off by default). It lives in
+`scripts/proof_variants.py` and is invoked by `runner.py` rather than by
+`pipeline.sh`, because the shell script is a frozen, tested deliverable. It
+never edits the proof, the print PDF, the manifest or the chosen SVG: a training
+set that silently rewrote its own source would be worthless.
 
 **Prep is check-first.** By default `prep_raster.py` (and therefore
 `front_pipeline.sh`) does *not* modify your image — it reports whether the file

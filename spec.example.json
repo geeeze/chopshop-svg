@@ -25,7 +25,8 @@
   "validation": {
     "auto_retry_limit": 3,
     "flag_on_any_failure": true,
-    "run_preflight": true
+    "run_preflight": true,
+    "variants": false
   },
   "print": {
     "dpi": 300,

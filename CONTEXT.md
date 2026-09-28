@@ -22,8 +22,51 @@ is which candidate to print.
 - Recent, landed (see `git log`): the chopshop-im filter bench
   (`scripts/im_filters.py`), tune sweep and node-reduction driven from the spec,
   and the orphan sweep for artifacts of deleted jobs.
-- No tracked in-flight feature at the time of writing. If you start one, list it
-  here with an owner and a note.
+- **Proof-variant dataset stage (landed, opt-in, OFF by default).**
+  `scripts/proof_variants.py` derives a deterministic family of "similar copies"
+  of one chosen proof (mirrored / rotated / colour-shifted) and writes the
+  raster **and** the vector of each under `<stem>.dataset/` plus `dataset.json`
+  and `dataset.md`; `runner.py`'s `run_back` invokes it after `pipeline.sh` has
+  produced the proof, gated on `validation.variants`. Wiring point is the runner
+  and NOT `pipeline.sh`, because `AGENTS.md` freezes `pipeline.sh`,
+  `validate_svg.py`, `preflight.py` and `snap_colors.py` as the tested print
+  check. Two runner routes carry it: the four-segment
+  `GET /files/<job>/<stem>.dataset/<name>` (containment-checked on the resolved
+  path) and `GET /jobs/<job>/dataset?candidate=<file>`, which 7-Zips one dataset
+  on demand with the same 409/507/500 contract as `/jobs/<id>/archive`.
+  - Caveats: `rot90`/`rot270` are clockwise quarter turns on both halves and
+    exchange the raster's pixel dimensions for a non-square proof (the art is
+    never resampled or cropped); `hue-*` rotates through PIL's 8-bit HSV, so a
+    90° turn is a 64-step offset and the last bit of each channel is
+    approximate; `palette-cycle` permutes the declared `screens` in order.
+  - **`palette-cycle` on real art is a requantisation, not a permutation, and it
+    says so.** An exact-match cycle only touches pixels/fills that EQUAL a
+    palette colour; on traced continuous-tone proofs (measured on two: 3200x3200
+    with ~69k rendered colours against a 6-colour palette moved 0.069% of the
+    pixel mass and 0 of 339 fill values; 4688x2694 with 87880 colours moved
+    0.013% and 0 of 581) that emitted a file that was visually the proof. The
+    figures are per-artifact — quote the one you measured. It now MEASURES the exact pass and, below `MIN_VARIANT_CHANGE` (0.5%
+    of pixel mass / of paint values), redoes the cycle through PIL's
+    nearest-colour search over the palette and records a `REQUANTISATION` note in
+    `dataset.json`/`dataset.md`; if even that cannot move the image it REFUSES
+    the transform (a `TransformError` the runner records as a manifest note).
+    The general invariant: **no variant may be a silent duplicate.** Every
+    transform reports the share it moved, and one that changed less than the
+    floor is named in the notes (a flip of symmetric art, a hue shift of an
+    achromatic proof). A second cause of that no-op was case: declared colours
+    come back lowercase while a manifest palette is uppercase, so the mapping
+    missed every entry — both sides are now normalised (`norm_hex`).
+  - **`build_dataset` is all-or-nothing.** It builds in a staging dir beside the
+    target and swaps it in (`os.replace`) only after every requested transform
+    is written, so a refused transform leaves no partial `.dataset/` (which the
+    archive route would otherwise list as a real dataset). It refuses to replace
+    a non-empty directory that carries no `dataset.json` — that one is not ours.
+  - A `transform` attribute on the outermost `<svg>` is **not** honoured by SVG
+    1.1 renderers, so a spatial variant carries its matrix on one wrapping
+    `<g>` and the root's viewBox/width/height are rewritten only where the axes
+    exchange. Do not "simplify" that back onto the root element.
+- No other tracked in-flight feature at the time of writing. If you start one,
+  list it here with an owner and a note.
 
 ## Blockers
 
@@ -34,10 +77,28 @@ is which candidate to print.
 - **Suite count has one canonical home: this file.** No other document states a
   test count — `README.md` and `docs/OVERVIEW.md` point here instead, because the
   number moves with every change and three stale copies were three chances to
-  mislead. Verified 2026-09-28 on a full checkout with the repo venv:
-  `.venv/bin/python -m pytest tests -q` collects and passes **590 tests**. Re-run
-  it and update this line when you touch the suite. (`AGENTS.md` still carries an
-  older number; it is owned by the parent agent, not by this working-state file.)
+  mislead. Verified on a full checkout with the repo venv:
+  `.venv/bin/python -m pytest tests -q` collects **688** and passes
+  **643 passed, 45 skipped**. Re-run it and update this line when you touch the
+  suite. (`AGENTS.md` still carries an older number — 400 — and it is owned by the
+  parent agent, not by this working-state file; an agent session CANNOT correct it,
+  because the write guard refuses edits to a protected agent-instruction file and
+  says not to route around it. It needs a human or an approved edit.)
+
+- **Two Pythons, and the docs name only one.** `AGENTS.md:76` says "Python 3.13
+  through a repo-root venv", which is TRUE of the container: the Dockerfile is
+  `debian:13` and Debian 13's system Python is 3.13, so the venv baked into the
+  image is 3.13. The HOST checkout's `~/chopshop-svg/.venv/bin/python` is
+  **3.12.3**, because this box has no 3.13 to build one from. Both statements can
+  be right at once and neither file says which is which — a reader who checks the
+  host venv concludes the doc is wrong, which is exactly what happened when the
+  proof-variant brief and its independent review both reported the discrepancy.
+  It is not drift; it is an unstated distinction.
+
+- **The dataset stage writes into the JOB directory, not the project tree.** A
+  per-job artifact left in `05_final/` or `08_tune/` would survive `DELETE` and
+  leak into the next job; `runner.py` copies the three flat names into the job
+  dir and the nested variant files stay under `<stem>.dataset/` there.
 - **Real-ESRGAN is host-only** (needs a Vulkan device). The in-container path
   falls back to Pillow LANCZOS. Every optional prep step defaults OFF and must
   be enabled per-spec (`print.tools.<step>: true`); a missing tool must fail
@@ -53,8 +114,11 @@ is which candidate to print.
   needs candidates). All three hang off `spec.print.prep_expand` under the
   sub-blocks `filters`, `tune` and `node_reduce`; every block defaults OFF, so a
   spec without the key behaves exactly as before and no bench changes which
-  candidate is chosen. Still unwired: `scripts/palette_variants.py` — no stage,
-  no spec key, nothing calls it but its own tests and the docs.
+  candidate is chosen. Still unwired **as a stage**: `scripts/palette_variants.py`
+  — no stage and no spec key of its own. Its colour-mapping machinery IS now
+  imported by the proof-variant dataset stage (`proof_variants.py` reuses
+  `declared_colours` / `apply_mapping` so both rewrite paint through the same
+  tested CSS-cascade code), but nothing runs `palette_variants` itself.
 - **Inkscape races under concurrency** (D-Bus `GApplication` registration);
   `front_common.py` sets `DBUS_SESSION_BUS_ADDRESS=disabled:` before parallel
   workers. Keep it.

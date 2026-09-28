@@ -25,7 +25,9 @@ A missing or wrong token answers `401 {"error": "unauthorized"}`.
 | POST | `/jobs/:id/cancel` | mark a running job cancelled |
 | DELETE | `/jobs/:id` | drop in-memory state **and** the job directory; `200 {"deleted": "<id>"}` |
 | GET | `/jobs/:id/archive` | 7z-compress the whole job dir on demand, stream it, then unlink |
+| GET | `/jobs/:id/dataset` | 7z-compress ONE `<candidate_stem>.dataset` (`?candidate=<file>`) on demand, stream it, then unlink |
 | GET | `/files/:job_id/<name>` | file proxy — serves one artifact, resolved by basename |
+| GET | `/files/:job_id/<stem>.dataset/<name>` | file proxy for one variant file inside a dataset (`raster/<transform>.png`, `vector/<transform>.svg`, `dataset.json`, `dataset.md`) |
 | POST | `/validations` | create a validation (print check) for a chosen candidate; `202 {id}` |
 | GET | `/validations/:id` | `{id, state, manifest, log, error}` |
 | POST | `/validations/:id/jev` | optional Jev add-on (see below) |
@@ -99,6 +101,34 @@ seam, not a live feature. `/recolour` takes `{job_id, file, map}` (both sides of
 `/recolour/colours` returns `{file, colours}`, most-used first. Paint only:
 `fill` / `stroke` / `stop-color` through the CSS cascade, geometry untouched.
 Full contract: `docs/runner-http-contract.md` in the repo.
+
+## The dataset proxy and archive (`validation.variants`)
+
+When the spec opts in (`"validation": {"variants": true}`, or
+`{"enabled": true, "transforms": [...]}`), `run_back` runs
+`scripts/proof_variants.py` after the proof, PDF and manifest are in the job
+directory and adds a `dataset` key to the manifest
+(`{dir, manifest, sheet, package, count, transforms}`). The stage is additive: a
+failure in it is appended to the manifest's `notes` and the validation still
+settles to `done`.
+
+- The three FLAT names (`<stem>.dataset.json`, `<stem>.dataset.md`,
+  `<stem>.dataset-contact-sheet.png`) sit at the job root, so they go through
+  the ordinary `/files/:job_id/<name>` proxy.
+- `GET /files/:job_id/<stem>.dataset/<name>` is the FOUR-segment form and is the
+  only route whose request may contain a slash; `<name>` may be a nested
+  `raster/<transform>.png` or `vector/<transform>.svg`. Containment is
+  re-checked on the RESOLVED path (a `..` segment, an absolute name, a backslash
+  or a symlink out of the tree is `400`), because the flat route's name regex
+  cannot see across the extra segment. An unknown dataset dir is `404 {"error":
+  "no such dataset"}`.
+- `GET /jobs/:id/dataset` mirrors `/jobs/:id/archive` exactly: `409` unless the
+  job is `done`, `404` for a missing job dir or no dataset, `507` below the
+  1 GiB floor, `500` when no `7z` is on PATH. `?candidate=<file>` names which
+  dataset when the job has more than one; with exactly one it may be omitted,
+  and an ambiguous request without it is `400` (never a guess). The stream is
+  `<stem>.dataset.7z` (attachment) and the temporary archive is unlinked in a
+  `finally`.
 
 ## Disk gate
 
