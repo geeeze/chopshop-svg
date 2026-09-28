@@ -30,7 +30,7 @@ Two files live there:
   candidate SHOWN to a human.  Line shape (exact field names):
 
       {"t": <ISO-8601 UTC>, "job": <run stem>, "svg_sha": <sha256 hex>,
-       "event": "shown", "pos": <0-based index in the presented order>,
+       "event": "shown", "pos": <1-based index in the presented order>,
        "ranker": null}
 
   ``pos`` is the position in the order the candidate was actually presented in,
