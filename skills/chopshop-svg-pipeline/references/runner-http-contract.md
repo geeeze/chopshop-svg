@@ -6,32 +6,62 @@ the pipeline scripts itself, it POSTs jobs to the runner and reads results back.
 The pipeline image and the runner are separate deliverables — a built image
 proves the pipeline runs; it does not prove a runner is listening on the port.
 
+It serves `RUNNER_PORT` (default `8787`) bound to `RUNNER_BIND` (default
+`0.0.0.0`; bind a real deployment to a private address).
+
 ## Auth
 
 All routes require a `Bearer` token unless `RUNNER_TOKEN` is unset (empty means
 "no auth"). The token is read from the environment, never baked into this repo.
+A missing or wrong token answers `401 {"error": "unauthorized"}`.
 
 ## Endpoints
 
 | method | path | result |
 |---|---|---|
 | GET | `/health` | status (`ok`, `host`, `mode`, `tools`) |
-| POST | `/jobs` | create a job; returns the job id |
-| GET | `/jobs/:id` | job state: `state`, `log_tail` (last 40 lines), `prep_summary`, `candidate_count`, `comparison`, `error` |
+| POST | `/jobs` | create a job; `202 {id, stem}` |
+| GET | `/jobs/:id` | job state: `id`, `state`, `log_tail` (last 40 lines), `prep_summary`, `prep_expand`, `candidate_count`, `comparison`, `error` |
 | POST | `/jobs/:id/cancel` | mark a running job cancelled |
-| DELETE | `/jobs/:id` | drop in-memory state **and** the job directory |
+| DELETE | `/jobs/:id` | drop in-memory state **and** the job directory; `200 {"deleted": "<id>"}` |
 | GET | `/jobs/:id/archive` | 7z-compress the whole job dir on demand, stream it, then unlink |
-| GET | `/files/:job_id/<name>` | file proxy — serves one artifact, resolved by basename inside the job dir |
-| POST | `/validations` | create a validation (print check) for a chosen candidate |
-| GET | `/validations/:id` | validation state, manifest, log |
+| GET | `/files/:job_id/<name>` | file proxy — serves one artifact, resolved by basename |
+| POST | `/validations` | create a validation (print check) for a chosen candidate; `202 {id}` |
+| GET | `/validations/:id` | `{id, state, manifest, log, error}` |
 | POST | `/validations/:id/jev` | optional Jev add-on (see below) |
 
 Anything else answers `404 {"error": "unknown route"}`.
 
-`/health`'s `host` is a **label**, read from `CHOPSHOP_RUNNER_LABEL` (falling
-back to the machine's own name) — not a literal in this file. `tools` reports
-which binaries are present (`inkscape`, `gs`) and `tools.jev` for the optional
-add-on, so a missing key is visible before the operator presses the button.
+`GET /jobs/:id/candidates` is **not** a route here — this server answers `404
+unknown route` for it. Nothing calls it (the studio reads the candidate list out
+of `GET /jobs/:id`'s `comparison`), and the studio's mock runners serve it for
+older clients; a doc copy that lists it is describing those mocks, not this
+runner.
+
+## Creating a job
+
+`POST /jobs` takes `{name, source_kind, input_path, spec}`. `input_path` must be
+readable and inside the shared upload root (`HOST_UPLOAD_ROOT` →
+`CONTAINER_UPLOAD_ROOT`), or the answer is `400` naming the path. The upload is
+copied into the job directory and downscaled when its longest side exceeds
+`MAX_INPUT_DIMENSION` (default 1500), so the pipeline runs on the per-job copy,
+never the caller's original path. `source_kind` is accepted and ignored. The
+reply is `202 {id, stem}`, and the front half then runs asynchronously with
+`SPEC=<job dir>/spec.json`, `FRONT_PIPELINE_WORKERS=1` and
+`PREP_EXPAND_OUT=<job dir>/prep_expand`.
+
+The JOB DIRECTORY IS THE UNIT OF DELIVERY: `GET /jobs/:id/archive` 7-Zips
+exactly that directory and `DELETE` removes it, so a per-job artifact written
+into a shared project tree is missing from the download and survives the delete.
+
+## Cancel
+
+`POST /jobs/:id/cancel` raises a flag the job's log pump checks between output
+lines and, once set, terminates the running stage's process. It answers
+`200 {state: "cancelling"}` while the job is `queued`/`running`,
+`200 {state: "cancelled"}` when it is already cancelled, and `409 {state}` once
+it is `done`/`error`. A cancelled job settles to `state: "cancelled"` with
+`error: "cancelled by operator"`.
 
 ## The archive endpoint
 
@@ -48,7 +78,12 @@ response. The image must ship a 7z binary or the endpoint 500s.
 ## File proxy
 
 `GET /files/<job_id>/<name>` serves one artifact; the name must match
-`[\w.\-]+` (which rejects path traversal). A manifest's absolute `artifacts`
+`[\w.\-]+`, so a traversal attempt is `400 {"error": "invalid file name"}`, and
+an unknown job is `404 {"error": "no such job"}`. Resolution order is the job
+directory, then a `source.png` fallback into `input/` (the plain source only —
+never reused for `source.inverse.png`, which must 404 so the studio's inverse
+tile self-hides), then `02_traced/<stem>/<name>`, then `05_final/<name>`, then
+`01_prepped/<stem>.prepped[.inverse].png`. A manifest's absolute `artifacts`
 paths are NOT evidence the artifact is servable — resolve the basename through
 this proxy and check the status before claiming it serves.
 
@@ -58,18 +93,31 @@ this proxy and check the status before claiming it serves.
 It is wired into `front_pipeline.sh` and `pipeline.sh` before any stage runs,
 and re-checked before archiving.
 
-## State is in-memory
+## State is mostly in-memory
 
-Job and validation state lives in memory and is gone on restart. That wipes
-in-memory validations, so a stored `runner_validation_id` can point at nothing;
-the studio resolves the manifest from disk (`job_id` + `candidate_file`) rather
-than trusting the id alone.
+Job and validation state lives in memory. `reindex_jobs()` does rebuild the JOBS
+index from disk at startup, so a finished job's files stay reachable through
+`/files/...` across a restart — but the rebuilt record is `state: "done"` with an
+empty `log_tail` and no `prep_summary`. Validations are NOT reindexed: they are
+gone on restart, so a stored `runner_validation_id` can point at nothing, and the
+studio resolves the manifest from disk (`job_id` + `candidate_file`) rather than
+trusting the id alone.
+
+## Validations
+
+`POST /validations` takes `{job_id, candidate_file}` and answers `202 {id}`;
+`409 {"error": "job not ready"}` when the job is not `done`, `404 {"error": "no
+such candidate"}` when the name is not in the job's candidate list.
+`GET /validations/:id` returns `{id, state, manifest, log, error}`.
 
 ## Optional Jev add-on (`POST /validations/:id/jev`)
 
 The runner **shells** an external annotator (the private `chopshop-jev` repo);
 it never re-implements it — the annotator is mounted, not copied, and its own
-suite is the behavioural spec. Status contract:
+suite is the behavioural spec. The request body is `{job_id, candidate_file}`
+(the manifest itself is the annotator's business); that pair is what lets a
+restarted runner answer for a validation it has forgotten. A `200` returns the
+envelope `{model, endpoint, latency_ms, answers, verdict}`. Status contract:
 
 | situation | answer |
 |---|---|
@@ -83,4 +131,16 @@ a wiring bug that does not exist — which is why the unconfigured case is `503`
 with a reason, not `404`. The relevant env vars are declared in
 `docker-compose.yml` with empty defaults (`JEV_ANNOTATOR`, `JEV_API_KEY`,
 `JEV_ENDPOINT`, `JEV_MODEL`); the machine-specific values live in a host-local,
-gitignored override, never in a tracked file.
+gitignored override, never in a tracked file. `runner.py` itself reads
+`JEV_ANNOTATOR`, `JEV_API_KEY` (or the `TYPESAFE_API_KEY` alias), `JEV_ENDPOINT`
+and `JEV_TIMEOUT` (default 180s, which compose does not declare); `JEV_MODEL` it
+passes through untouched to the annotator.
+
+## Health
+
+`GET /health` reports `{ok, host, mode, tools}`. `host` is a **label**, read from
+`CHOPSHOP_RUNNER_LABEL` (falling back to the machine's own name) — not a literal
+in this file. `mode` is always `"real"` here (the studio's mock runners report
+`"mock"`). `tools` reports which binaries are present (`inkscape`, `gs`) and
+`tools.jev` for the optional add-on, so a missing key is visible before the
+operator presses the button.

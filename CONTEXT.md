@@ -42,9 +42,15 @@ is which candidate to print.
   pitch-shift `inverse` variant in `trace_sweep.py`** — different mechanisms in
   different stages, deliberately NOT reconciled. Don't assume one replaces the
   other.
-- **Side tools are not wired into stages:** `scripts/node_reduce.py`,
-  `scripts/tune_sweep.py`, `scripts/im_filters.py`,
-  `scripts/palette_variants.py`. None runs automatically.
+- **Three side tools ARE wired, one is not.** `scripts/im_filters.py`,
+  `scripts/tune_sweep.py` and `scripts/node_reduce.py` are driven by
+  `scripts/prep_expand.py`, which `front_pipeline.sh` calls at stage 1b (filters
+  + tune, after prep) and stage 2b (node_reduce, after the sweep, because it
+  needs candidates). All three hang off `spec.print.prep_expand` under the
+  sub-blocks `filters`, `tune` and `node_reduce`; every block defaults OFF, so a
+  spec without the key behaves exactly as before and no bench changes which
+  candidate is chosen. Still unwired: `scripts/palette_variants.py` — no stage,
+  no spec key, nothing calls it but its own tests and the docs.
 - **Inkscape races under concurrency** (D-Bus `GApplication` registration);
   `front_common.py` sets `DBUS_SESSION_BUS_ADDRESS=disabled:` before parallel
   workers. Keep it.
