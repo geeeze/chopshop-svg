@@ -27,3 +27,21 @@ _missing = [t for t in _TOOLS if shutil.which(t) is None]
 needs_render = pytest.mark.skipif(
     bool(_missing),
     reason="missing render tools: " + ", ".join(_missing))
+
+
+# -------------------------------------------------------------------------- #
+# Learning-store isolation                                                    #
+# -------------------------------------------------------------------------- #
+# The Phase 2 shown-event log and the learned-bucket store live at a
+# JOB-INDEPENDENT path on purpose -- they must survive deletion of the job they
+# describe (see scripts/triage_events.py). That is right in production and
+# wrong under test: without this, every run of the suite that exercises the
+# comparison stage appends "shown" events for synthetic candidates into the
+# developer's real learning store, and a future learner would be training on
+# that noise. Point the store at a throwaway dir; a test that wants a specific
+# location overrides the env var itself with monkeypatch.
+
+@pytest.fixture(autouse=True)
+def _isolated_learning_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("PIPELINE_LEARNING_DIR", str(tmp_path / "learning"))
+

@@ -60,6 +60,14 @@ for p in (ROOT, SCRIPTS):
 
 import front_common as fc  # noqa: E402
 
+# Phase 2 learning store: appends the "shown" event log.  Guarded because the
+# event log is a side channel -- a broken import here must never take down the
+# comparison stage (see #triage-events-record-shown below).
+try:
+    import triage_events  # noqa: E402
+except Exception:  # noqa: BLE001
+    triage_events = None
+
 # --- optional layer imports -------------------------------------------------
 layer_a_available = True
 layer_b_available = True
@@ -614,6 +622,26 @@ def _compare(traced_dir, spec_path, out_dir=None, source_flag=None, workers=None
     records.sort(key=lambda c: (c["hard"], _FID_RANK.get(
         c.get("fidelity_verdict"), 2), c["advisory"],
         (c.get("fidelity") or {}).get("mae_art") or 0.0))
+
+    # PHASE 2 / #triage-events-record-shown -- this is the point where the
+    # ordered list becomes what the human is actually shown, so it is where each
+    # candidate's exposure is logged: one "shown" event per candidate, carrying
+    # its 0-based POSITION in this order.  Later phases learn a preference from
+    # what was shown and what the human then picked.
+    #
+    # The log is job-independent (PIPELINE_LEARNING_DIR, default
+    # 06_run/_learning/) precisely because this job's 06_run/<stem>/ is swept on
+    # delete -- an exposure record that dies with the job it describes cannot
+    # teach anything.  Best-effort: record_shown is a no-op when the directory
+    # cannot be created, and this call is wrapped so no logging surprise can
+    # break the trace stage.
+    if triage_events is not None:
+        try:
+            shas = [triage_events.svg_file_sha(os.path.join(traced_dir, r["file"]))
+                    for r in records]
+            triage_events.record_shown(stem, shas)
+        except Exception:  # noqa: BLE001 - logging never breaks the stage
+            pass
 
     common_rules = None
     for record in records:

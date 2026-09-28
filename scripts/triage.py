@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-triage.py -- Phase 0 candidate-triage primitives: gate + bucket + dedupe + text-sim.
+triage.py -- candidate-triage primitives: quality gates + bucket + dedupe + text-sim.
+
+Phase 0 landed the shapes (canonical form, hashes, thumbnail metrics, bucket key,
+rule-list plumbing, text scoring).  Phase 1 fills the rule lists with the actual
+quality gates -- drop / demote / pass, always with named reasons.  Phase 3 adds
+tf-idf intent grouping over prompt/tag/finding text.
 
 This module is deliberately pure and side-effect free.  It holds the deterministic
 building blocks a later stage needs in order to answer, for every trace candidate
@@ -18,7 +23,9 @@ wrong:
    rendered thumbnail is the signal here, never the SVG text.
 3. **Is it worth keeping?** -- ``gate`` / ``bucket_of``.  A rejection must be able
    to collapse a whole family of near-identical candidates, not just the one file
-   that was rejected by hand.
+   that was rejected by hand.  The gate drops, demotes or passes a candidate and
+   names every rule that fired; it never picks a winner, and a later stage is what
+   turns a bucket into a decision a human reviews.
 
 Nothing in this module reads the spec file or writes anything: ``load_triage``
 merges the ``triage`` block of an already-parsed spec over the documented
@@ -65,21 +72,54 @@ are kept on purpose: dropping them makes ``filter_speckle=8`` and
 ``filter_speckle=16`` score as identical strings.  Numeric trace parameters are
 compared as numbers, by the ranker, and never through this scorer.
 
+Phase 3 extends this section with a small tf-idf: ``tfidf_vectors`` turns a corpus
+of candidate documents (prompt, tags, finding text) into one sparse,
+L2-normalised vector each, ``tfidf_query`` scores a query against all of them, and
+``intent_groups`` buckets the near-duplicates.  Pure Python -- no numpy, scipy or
+sklearn -- because the scorer has to run anywhere the pipeline runs.  It is a
+grouping aid, not a ranker: any ordering it produces keeps every index visible so
+the uncertain members of a group can be seen and judged by a human.
+
 Bucket keys
 -----------
 ``bucket_of`` returns ``"{preset}|s{bin}|c{bin}|{prompt_family}"``.  The whole point
 of the key is that one human rejection of one candidate can retire every candidate
 that shares it, so the bins are deliberately coarse -- and their widest edge lines
 up with the corresponding spec default (speckles up to ``max_speckles`` 40, colours
-up to ``max_unique_colors`` 8).
+up to ``max_unique_colors`` 8).  ``gate`` fills the key from the candidate's
+run-record fields -- sweep preset, measured speckle count, unique colour count,
+prompt family -- and leaves it ``None`` for a candidate carrying none of them, so
+the gate stays usable on partial data instead of inventing a family for it.
 
 Gate skeleton
 -------------
-``HARD`` and ``WEAK`` start EMPTY: the rules themselves land in a later phase, the
-shape and the evaluation order land here.  Each entry is ``(name, fn)`` with
-``fn(candidate) -> bool``.  A hard hit drops the candidate immediately; otherwise
-``weak_needed`` weak hits demote it.  ``Verdict.reasons`` always carries rule
-NAMES so a decision is explainable from the JSON alone.
+This section is now Phase 1: see ``Quality gates (phase 1)`` below.
+
+``HARD`` and ``WEAK`` hold ``(name, fn)`` pairs with ``fn(candidate) -> bool``.  A
+hard hit drops the candidate immediately; otherwise ``weak_needed`` weak hits
+demote it.  ``Verdict.reasons`` carries rule NAMES -- one per fired signal, in
+list order -- so a decision is explainable from the JSON alone, and ``bucket``
+carries the family key a rejection can be applied to.
+
+Hard signals: artwork lost (the ``artwork_lost`` fidelity verdict, or artwork MAE
+past ``max_mae_art``), silhouette overlap below ``min_silhouette_iou``, glow area
+past ``max_glow_area_pct``, more than ``max_unique_colors`` unique colours, and a
+hard geometry finding already recorded by Layer A/B.  Weak signals: speckle count
+past ``max_speckles``, a colour count at or one under the cap, luma separation
+below ``min_luma_delta``, a path over ``max_nodes_per_path``, and borderline
+artwork MAE (``borderline_mae_art`` < ``mae_art`` <= ``max_mae_art``).
+
+Every rule reads the candidate and returns False when its reading is missing:
+"not measured" and "measured bad" must never collapse into the same verdict.  The
+observations the Layer A/B records do not carry (``speckle_count``,
+``glow_area_pct``, ``luma_delta``, ``silhouette_iou``) arrive under
+``comparison.metrics``; everything else is read from the run-record shape the
+comparison already writes.
+
+Thresholds come from ``thresholds_of(candidate)``, which is ``load_triage``
+applied to the candidate: a candidate carrying its run's merged ``triage`` block
+overrides any threshold the spec set, and a candidate carrying none gets the
+documented defaults.
 
 Usage
 -----
@@ -95,6 +135,7 @@ small deterministic self-check and exits 0.
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 import xml.etree.ElementTree as ET
 from collections import Counter
@@ -403,7 +444,7 @@ def bucket_of(preset, speckles, colors, prompt_family=""):
 
 
 # --------------------------------------------------------------------------- #
-# 6. Gate skeleton                                                            #
+# 6. Quality gates (phase 1)                                                  #
 # --------------------------------------------------------------------------- #
 
 
@@ -419,9 +460,10 @@ class Disp(Enum):
 class Verdict:
     """A gate decision: what happened, why, and which family it belonged to.
 
-    ``bucket`` is left ``None`` by ``gate`` (which sees one candidate at a time);
-    a later stage fills it from ``bucket_of`` so a rejection can be applied to the
-    whole bucket.
+    ``bucket`` carries ``bucket_of``'s key for the candidate so a rejection can be
+    applied to the whole family.  It is ``None`` only for a candidate that carries
+    none of the fields the key is built from -- a bare stub dict, not a run-record
+    candidate.
     """
 
     disposition: Disp
@@ -429,14 +471,308 @@ class Verdict:
     bucket: "str | None" = None
 
 
-#: Hard rules: ``(name, fn)`` with ``fn(candidate) -> bool``.  A single hit drops.
-#: EMPTY by design -- phase 1 lands the rules; this slice fixes the shape and the
-#: evaluation order.
-HARD = []
+# --------------------------------------------------------------------------- #
+# 6a. Reading a candidate                                                     #
+# --------------------------------------------------------------------------- #
 
-#: Weak rules: ``(name, fn)`` with ``fn(candidate) -> bool``.  Enough hits demote.
-#: EMPTY by design, same as ``HARD``.
-WEAK = []
+# The gate reads ONE shape: the candidate records the front half already writes
+# (see scripts/run_record.py).  Two of those fields live in nested blocks that may
+# legitimately be missing -- a candidate that was traced but never compared has
+# comparison None -- and the observations the gate needs beyond what Layer A/B
+# records (speckle count, glow area, luma separation, silhouette overlap) arrive
+# under ``comparison["metrics"]``.
+#
+# Every accessor below therefore returns None rather than raising or defaulting to
+# a zero, and every rule treats None as "did not fire".  A threshold that fires on a
+# missing reading would silently drop every candidate from a run that was measured
+# slightly differently, which is the one failure mode a gate must not have.
+
+
+def _comparison(candidate):
+    """The candidate's ``comparison`` block, or an empty dict when absent."""
+    if not isinstance(candidate, dict):
+        return {}
+    comp = candidate.get("comparison")
+    return comp if isinstance(comp, dict) else {}
+
+
+def _metrics(candidate):
+    """The candidate's ``comparison.metrics`` block, or an empty dict.
+
+    This is where a run records the measurements the Layer A/B result does not
+    carry: ``speckle_count``, ``glow_area_pct``, ``luma_delta``,
+    ``silhouette_iou``.  All optional, all read by name.
+    """
+    metrics = _comparison(candidate).get("metrics")
+    return metrics if isinstance(metrics, dict) else {}
+
+
+def _number(value):
+    """The value as a number, or None when it is not a real reading.
+
+    ``bool`` is an ``int`` in Python, so a True where a measurement belongs would
+    otherwise read as exactly 1 and fire a threshold.  It is rejected here: that
+    is a broken record upstream, not a measurement.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
+def _metric(candidate, name):
+    """A named reading from ``comparison.metrics``, or None."""
+    return _number(_metrics(candidate).get(name))
+
+
+def _mae_art(candidate):
+    """Artwork-only MAE from ``comparison.fidelity``, or None when unmeasured.
+
+    ``fidelity.measured`` False means the render was never diffed (no inkscape, no
+    source raster); the field is present but meaningless, so it does not count.
+    """
+    fidelity = _comparison(candidate).get("fidelity")
+    if not isinstance(fidelity, dict) or not fidelity.get("measured"):
+        return None
+    return _number(fidelity.get("mae_art"))
+
+
+def _colour_count(candidate):
+    """The candidate's unique-colour count: declared first, then rendered ink.
+
+    ``declared_colors`` is what the SVG says it paints; ``rendered_ink_colors`` is
+    what the render produced and includes the background, so the declared count is
+    the better reading when both exist.  Either way it is one number, so the hard
+    cap, the near-cap weak rule and the bucket bin cannot disagree about it.
+    """
+    comp = _comparison(candidate)
+    for key in ("declared_colors", "rendered_ink_colors"):
+        value = _number(comp.get(key))
+        if value is not None:
+            return int(value)
+    return None
+
+
+def _speckle_count(candidate):
+    """Measured speckle (tiny-island) count, or None when the run did not count one.
+
+    Note the difference from ``sweep.filter_speckle``: that is VTracer's minimum
+    ISLAND AREA parameter, not a count, and the two run in opposite directions (a
+    larger ``filter_speckle`` removes more, so it yields FEWER speckles).  Feeding
+    the parameter into a count-shaped bin would invert the bucket, so the bucket
+    uses the measured count and nothing else.
+    """
+    count = _metric(candidate, "speckle_count")
+    return None if count is None else int(count)
+
+
+# --------------------------------------------------------------------------- #
+# 6b. HARD rules -- any single hit drops the candidate                        #
+# --------------------------------------------------------------------------- #
+
+
+def _rule_artwork_lost(candidate):
+    """HARD: the trace does not reproduce the design (silhouette/artwork lost).
+
+    Two readings, either one fires.  Either ``comparison.fidelity_verdict`` is
+    already ``"artwork_lost"`` -- what compare_candidates.py recorded for this
+    candidate -- or artwork MAE is past ``max_mae_art``, the same cliff that
+    verdict is derived from, so the report and the gate cannot disagree about
+    which candidates are silhouettes.
+
+    Why this is hard and not advisory: a bw/binary trace of a colour design
+    scores hard=0 on both layers and can still throw the artwork away entirely
+    (mae_art 104 against 0.005 for the faithful ones).  The comparison sorts those
+    candidates by artwork survival for exactly this reason; the triage gate is
+    where such a family leaves the list.  The fidelity verdict stays advisory in
+    compare_candidates' gate counts -- that is a print decision -- but a candidate
+    whose artwork did not survive has nothing for a human to review.
+    """
+    comp = _comparison(candidate)
+    if comp.get("fidelity_verdict") == "artwork_lost":
+        return True
+    # rules-thresholds-of: the spec's triage block reaches the rule here.
+    mae_art = _mae_art(candidate)
+    return mae_art is not None and mae_art > thresholds_of(candidate)["max_mae_art"]
+
+
+def _rule_silhouette_lost(candidate):
+    """HARD: the rendered silhouette covers too little of the source's.
+
+    ``min_silhouette_iou`` (0.85) is the overlap floor between the traced
+    silhouette and the source's.  It fires only when the run measured an overlap:
+    a missing reading is not a lost silhouette.
+    """
+    iou = _metric(candidate, "silhouette_iou")
+    return iou is not None and iou < thresholds_of(candidate)["min_silhouette_iou"]
+
+
+def _rule_glow_area(candidate):
+    """HARD: too much of the canvas is halo/glow rather than printed area.
+
+    ``max_glow_area_pct`` (8%) is the ceiling on the soft fringe the trace picked
+    up around the artwork.  Past it the design does not stop at an edge; it fades
+    into the garment, which is a screen-print defect, not a style.
+    """
+    pct = _metric(candidate, "glow_area_pct")
+    return pct is not None and pct > thresholds_of(candidate)["max_glow_area_pct"]
+
+
+def _rule_colour_cap_exceeded(candidate):
+    """HARD: more unique colours than the job can print.
+
+    ``max_unique_colors`` (8) is the documented cap.  A candidate over it needs
+    screens the job does not have, so no amount of fidelity redeems it.  Counts
+    via ``_colour_count`` (declared, else rendered ink), which is the same reading
+    the near-cap weak rule and the bucket bin use.
+    """
+    count = _colour_count(candidate)
+    return count is not None and count > thresholds_of(candidate)["max_unique_colors"]
+
+
+def _rule_geometry_hard_fail(candidate):
+    """HARD: an unprintable-geometry failure is already on the record.
+
+    Layer A (source validation) and Layer B (render preflight) grade the geometry
+    itself -- stroke width, node counts, open paths, embedded rasters.  A hard
+    finding there is a fact about the file, not a measurement to weigh against
+    other measurements, so this gate does not re-derive it: it reads the counts
+    the comparison recorded.
+
+    ``passed`` is deliberately NOT used on its own: a layer that never ran reports
+    passed=False too, and "not checked" is not "failed".  Only recorded hard
+    findings count.
+    """
+    comp = _comparison(candidate)
+    for layer in ("layer_a", "layer_b"):
+        block = comp.get(layer)
+        if isinstance(block, dict) and (_number(block.get("hard")) or 0) > 0:
+            return True
+    return (_number(comp.get("hard")) or 0) > 0
+
+
+#: Hard rules: ``(name, fn)`` with ``fn(candidate) -> bool``.  A single hit drops
+#: the candidate.  Order is the documented evaluation order and the order reasons
+#: are reported in.
+HARD = [
+    ("ARTWORK_LOST", _rule_artwork_lost),
+    ("SILHOUETTE_LOST", _rule_silhouette_lost),
+    ("GLOW_AREA_HIGH", _rule_glow_area),
+    ("COLOR_CAP_EXCEEDED", _rule_colour_cap_exceeded),
+    ("GEOMETRY_HARD_FAIL", _rule_geometry_hard_fail),
+]
+
+
+# --------------------------------------------------------------------------- #
+# 6c. WEAK rules -- enough of them demote the candidate                       #
+# --------------------------------------------------------------------------- #
+
+
+def _rule_speckle_heavy(candidate):
+    """WEAK: more tiny islands than ``max_speckles`` (40) allows.
+
+    Speckles are the noise the tracer kept: thousands of pinprick regions that
+    print as grit.  Weak rather than hard because a speckled candidate is still
+    the artwork -- it is the retrace-with-a-higher-filter case, which a human may
+    well want to look at.
+    """
+    count = _speckle_count(candidate)
+    return count is not None and count > thresholds_of(candidate)["max_speckles"]
+
+
+def _rule_colours_near_cap(candidate):
+    """WEAK: the colour count is at, or one under, the cap.
+
+    One screen away from ``max_unique_colors`` is a cost decision for a human, not
+    a reason for the machine to hide the candidate.  Over the cap is
+    ``COLOR_CAP_EXCEEDED`` (hard); this rule only covers the last two steps up to
+    it.
+    """
+    cap = thresholds_of(candidate)["max_unique_colors"]
+    count = _colour_count(candidate)
+    return count is not None and cap - 1 <= count <= cap
+
+
+def _rule_low_luma_contrast(candidate):
+    """WEAK: adjacent inks are closer in luma than ``min_luma_delta`` (12).
+
+    Below that separation two distinct inks read as one shape on a shirt: the
+    design loses a layer without losing a colour, which no colour-count check can
+    see.
+    """
+    delta = _metric(candidate, "luma_delta")
+    return delta is not None and delta < thresholds_of(candidate)["min_luma_delta"]
+
+
+def _rule_node_overload(candidate):
+    """WEAK: a single path carries more nodes than the geometry cap allows.
+
+    ``max_nodes_per_path`` mirrors ``spec.geometry.max_nodes_per_path`` (500), so
+    the spec can retune either without the gate drifting from Layer A.  Over it is
+    a redraw cost and a symptom of a trace that followed noise instead of edges.
+    """
+    nodes = _number(_comparison(candidate).get("node_count_max"))
+    return nodes is not None and nodes > thresholds_of(candidate)["max_nodes_per_path"]
+
+
+def _rule_borderline_fidelity(candidate):
+    """WEAK: artwork MAE is off, but not destroyed.
+
+    ``borderline_mae_art`` (1.0) and ``max_mae_art`` (8.0) are the thresholds
+    compare_candidates.py uses to separate ``faithful`` from ``drift`` from
+    ``artwork_lost``.  A candidate its report called "drift" is exactly the one
+    this flags: measurably departed from the source, still recognisably the
+    design, worth a human look rather than a drop.
+    """
+    thresholds = thresholds_of(candidate)
+    mae_art = _mae_art(candidate)
+    return (mae_art is not None
+            and thresholds["borderline_mae_art"] < mae_art
+            <= thresholds["max_mae_art"])
+
+
+#: Weak rules: ``(name, fn)`` with ``fn(candidate) -> bool``.  ``weak_needed`` of
+#: them demote the candidate.  Same ordering rules as ``HARD``.
+WEAK = [
+    ("SPECKLE_HEAVY", _rule_speckle_heavy),
+    ("COLORS_NEAR_CAP", _rule_colours_near_cap),
+    ("LOW_LUMA_CONTRAST", _rule_low_luma_contrast),
+    ("NODE_OVERLOAD", _rule_node_overload),
+    ("BORDERLINE_FIDELITY", _rule_borderline_fidelity),
+]
+
+
+# --------------------------------------------------------------------------- #
+# 6d. The decision                                                            #
+# --------------------------------------------------------------------------- #
+
+
+def _bucket_for(candidate):
+    """The bucket key for a candidate, or None when there is nothing to key on.
+
+    ``bucket_of`` needs a preset, a speckle count, a colour count and a prompt
+    family.  A run-record candidate carries all four (two of them as optional
+    measurements); a bare stub dict carries none, and inventing a family for it
+    would silently merge unrelated candidates into one bucket -- a rejection of
+    one would then retire the others.  So: no fields, no bucket, ``None``.
+
+    ``prompt_family`` is taken from the candidate as written (a later phase fills
+    it from the prompt/tag text -- see ``intent_groups``); nothing here guesses it,
+    because a guessed family is a rejection applied to candidates the human never
+    saw.
+    """
+    if not isinstance(candidate, dict):
+        return None
+    if "sweep" not in candidate and "comparison" not in candidate:
+        return None
+    sweep = candidate.get("sweep")
+    sweep = sweep if isinstance(sweep, dict) else {}
+    speckles = _speckle_count(candidate)
+    colors = _colour_count(candidate)
+    # gate-bucket-of
+    return bucket_of(sweep.get("preset") or "",
+                     speckles if speckles is not None else 0,
+                     colors if colors is not None else 0,
+                     candidate.get("prompt_family") or "")
 
 
 def gate(candidate, weak_needed=3):
@@ -446,17 +782,31 @@ def gate(candidate, weak_needed=3):
     candidate's advisories are noise).  Otherwise ``weak_needed`` or more weak hits
     -> ``Disp.DEMOTE``, fewer -> ``Disp.OK``.  ``reasons`` holds the names of the
     rules that fired, in list order, so the same candidate always yields the same
-    verdict and the same reason order.
+    verdict and the same reason order, and ``bucket`` carries ``bucket_of``'s key
+    for the family (``None`` for a candidate carrying none of the run-record
+    fields).
+
+    Thresholds are per-candidate, from ``thresholds_of(candidate)``: a candidate
+    carrying its run's merged ``triage`` block is gated with the spec's values, a
+    candidate carrying none with the documented defaults.  ``weak_needed`` stays a
+    parameter because the caller may want a stricter or looser run than the spec
+    asks for; to honour a spec's own ``triage.weak_needed``, pass it --
+    ``gate(candidate, weak_needed=thresholds_of(candidate)["weak_needed"])``.
+
+    This function decides nothing about a print job and chooses no winner: it
+    returns a disposition and the names of the rules behind it.
     """
+    # gate-hard-rules
     hard_hits = [name for name, fn in HARD if fn(candidate)]
     if hard_hits:
-        return Verdict(Disp.DROP, hard_hits, None)
+        return Verdict(Disp.DROP, hard_hits, _bucket_for(candidate))
 
+    # gate-weak-rules
     weak_hits = [name for name, fn in WEAK if fn(candidate)]
     if len(weak_hits) >= weak_needed:
-        return Verdict(Disp.DEMOTE, weak_hits, None)
+        return Verdict(Disp.DEMOTE, weak_hits, _bucket_for(candidate))
 
-    return Verdict(Disp.OK, weak_hits, None)
+    return Verdict(Disp.OK, weak_hits, _bucket_for(candidate))
 
 
 # --------------------------------------------------------------------------- #
@@ -523,12 +873,217 @@ def text_sim(a, b):
 
 
 # --------------------------------------------------------------------------- #
+# 7b. TF-IDF intent grouping (phase 3)                                        #
+# --------------------------------------------------------------------------- #
+
+# The char-bigram scorer above answers "how similar are these two strings".  What
+# a candidate list needs is one step up: score every candidate against every other
+# and group the ones that came from the same ask, so a prompt repeated with a
+# different speckle number (or the same tags on a retrace) does not read as new
+# intent.  That is a corpus problem, so a corpus scorer: idf over the whole set of
+# documents, tf-idf vectors per document, cosine between them.
+#
+# Pure Python on purpose -- no numpy/scipy/sklearn.  The scorer runs wherever the
+# pipeline runs (the comparison stage already has no guarantee of a scientific
+# stack) and a few hundred short documents is nothing for dicts of floats.
+#
+# What this section deliberately does NOT do, because an earlier attempt at the
+# same job (a go crawler) got each of them wrong:
+#   * it never matches on substrings of a title -- an n-gram overlap is a score,
+#     not a "contains" test that a single shared word can win;
+#   * it never writes a boolean from one weak phrase -- one common bigram between
+#     two documents moves a cosine a little, never from 0 to 1, and the grouping
+#     threshold is high;
+#   * it never lets iteration order into the result -- mappings and tag lists are
+#     sorted before they are joined, and every loop is over a list or a range;
+#   * it never measures length in bytes -- ``norm`` walks code points, so an
+#     accented word is not two characters long;
+#   * it never drops digits -- ``norm`` keeps them on purpose.
+
+#: Similarity at which two documents count as the same intent in
+#: ``intent_groups``.  High on purpose: this is for NEAR-duplicates (a prompt
+#: repeated with a different numeric parameter, the same tags on a retrace).  A
+#: mid-range cut would merge genuinely different asks into one family, and a
+#: family is what a single rejection retires.
+INTENT_THRESHOLD = 0.8
+
+
+def doc_text(value):
+    """Flatten one document source (text, tag list, finding list, mapping) to text.
+
+    A mapping and an all-string iterable are emitted in SORTED order: a tag set
+    arrives in whatever order the run record happened to write it, and a corpus
+    that reorders itself between runs would group the same candidates
+    differently.  An iterable of non-strings (a list of finding dicts, say) keeps
+    the order it was given -- a sequence is a sequence, and findings are ordered.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return " ".join("{0} {1}".format(key, doc_text(value[key]))
+                        for key in sorted(value))
+    if isinstance(value, (list, tuple, set, frozenset)):
+        parts = list(value)
+        if all(isinstance(part, str) for part in parts):
+            parts = sorted(parts)
+        return " ".join(part for part in (doc_text(part) for part in parts) if part)
+    return str(value)
+
+
+def candidate_text(candidate):
+    """The document string for one candidate: prompt, tags, then finding text.
+
+    Field order is fixed and non-string values are flattened deterministically
+    (``doc_text``), so two candidates carrying the same intent produce the same
+    document however their records were written.  A candidate with no prompt and
+    no tags yields ``""``, which scores 0.0 against everything -- the honest
+    reading, rather than raising or matching on noise.
+    """
+    if not isinstance(candidate, dict):
+        return ""
+    parts = []
+    for key in ("prompt", "tags", "findings", "finding"):
+        text = doc_text(candidate.get(key))
+        if text:
+            parts.append(text)
+    return " ".join(parts)
+
+
+def _unit(vector):
+    """L2-normalise a sparse vector; the empty vector stays empty.
+
+    Normalising means length alone cannot separate two documents.  A document with
+    no grams has no direction, so it stays ``{}`` and scores 0.0 against
+    everything.
+    """
+    squared = sum(weight * weight for weight in vector.values())
+    if squared == 0:
+        return {}
+    norm_ = squared ** 0.5
+    return {gram: weight / norm_ for gram, weight in vector.items()}
+
+
+def _tfidf_vector(counts, idf):
+    """One document's sparse tf-idf vector, L2-normalised.
+
+    ``tf = 1 + log(count)``: a repeated gram counts, and repeating it twice again
+    does not double its weight.  ``idf`` supplies the corpus weighting; a gram the
+    corpus never saw (only reachable for a query) falls back to 1.0.
+    """
+    vector = {}
+    for gram, count in counts.items():
+        weight = (1.0 + math.log(count)) * idf.get(gram, 1.0)
+        if weight:
+            vector[gram] = weight
+    return _unit(vector)
+
+
+def tfidf_vectors(docs, n=GRAM_N):
+    """TF-IDF vectors for a corpus of documents -- pure Python, no numpy.
+
+    Returns ``(idf, vectors)``: ``idf`` maps every gram in the corpus to its
+    weight, and ``vectors`` holds one sparse ``{gram: weight}`` dict per document
+    in input order, L2-normalised so a long document cannot outrank a short one on
+    length alone.
+
+    Weighting is the smoothed textbook form
+    ``idf = log((1 + N) / (1 + df)) + 1``.  The ``+1`` inside the log is
+    load-bearing here: a corpus of near-duplicates has many grams present in every
+    document, and unsmoothed idf would zero exactly those -- the grams that carry
+    the shared intent.  Documents go through ``norm`` first, so digits survive
+    (``filter_speckle=8`` and ``filter_speckle=16`` stay different documents) and a
+    non-ASCII character counts as one code point.  Gram keys keep first-appearance
+    order, which is deterministic for a given corpus.
+
+    This is a grouping aid, not a ranker: it picks no winner, and every input
+    document keeps its index in the returned list.
+    """
+    prepared = [grams(norm(doc_text(doc)), n) for doc in docs]
+    n_docs = len(prepared)
+
+    # Document frequency, accumulated in corpus order so the idf mapping's key
+    # order is a function of the input and nothing else.
+    df = {}
+    for counts in prepared:
+        for gram in counts:
+            df[gram] = df.get(gram, 0) + 1
+    idf = {gram: math.log((1.0 + n_docs) / (1.0 + df[gram])) + 1.0
+           for gram in df}
+    return idf, [_tfidf_vector(counts, idf) for counts in prepared]
+
+
+def tfidf_query(query, idf, vectors):
+    """Similarity in [0, 1] of ``query`` text against every vector, in order.
+
+    The query is vectorised with the corpus's own ``idf``; a gram the corpus never
+    saw keeps weight 1.0 and merely dilutes the query a little.  An empty query, an
+    empty corpus or an empty vector scores 0.0 rather than raising, so a candidate
+    with no prompt and no tags matches nothing.
+    """
+    query_vector = _tfidf_vector(grams(norm(doc_text(query))), idf)
+    return [max(0.0, min(1.0, cosine(query_vector, vector)))
+            for vector in vectors]
+
+
+def intent_groups(vectors, threshold=INTENT_THRESHOLD):
+    """Group near-duplicate intent: indices of ``vectors`` in greedy families.
+
+    Walks the vectors in index order; the lowest unassigned index seeds a group,
+    and every later unassigned vector whose similarity to the SEED is >=
+    ``threshold`` joins it.  Membership is measured against the seed and never
+    member-to-member, so a chain of loose matches cannot drag an unrelated
+    document in one step at a time.
+
+    Deterministic by construction: the seed is always the lowest free index, every
+    loop is over a list or a ``range``, and nothing iterates a set or an unordered
+    view.  Ties at the threshold are IN (``>=``).
+
+    Every index appears in exactly one group and nothing is dropped: the members
+    that joined near the cut are the uncertain ones, and they stay visible here
+    and in ``tfidf_query``'s raw similarities rather than being hidden by a
+    ranking.  This groups; it never picks a winner and never consumes its own
+    output.
+    """
+    groups = []
+    assigned = [False] * len(vectors)
+    for index, vector in enumerate(vectors):
+        if assigned[index]:
+            continue
+        assigned[index] = True
+        group = [index]
+        for other in range(index + 1, len(vectors)):
+            if assigned[other]:
+                continue
+            if cosine(vector, vectors[other]) >= threshold:
+                assigned[other] = True
+                group.append(other)
+        groups.append(group)
+    return groups
+
+
+def candidate_intent_groups(candidates, threshold=INTENT_THRESHOLD):
+    """Group candidates by intent: ``candidate_text`` -> tf-idf -> ``intent_groups``.
+
+    Returns ``(idf, vectors, groups)`` so the caller can also score one candidate's
+    text against the whole corpus with ``tfidf_query`` without re-vectorising it.
+    The groups are index-based, so they line up with the ``candidates`` list as
+    given -- ordering it differently is the caller's decision, not this function's.
+    """
+    # text-candidate-text
+    idf, vectors = tfidf_vectors([candidate_text(c) for c in candidates])
+    return idf, vectors, intent_groups(vectors, threshold=threshold)
+
+
+# --------------------------------------------------------------------------- #
 # 8. spec.json ``triage`` defaults                                             #
 # --------------------------------------------------------------------------- #
 
 #: Defaults for the ``triage`` block of spec.json.  These are the canonical values:
 #: a spec that omits the block gets exactly these, and a spec that sets one key
-#: overrides only that key.
+#: overrides only that key.  Every threshold the gate reads appears here, so the
+#: gate has no constants of its own a spec cannot reach.
 TRIAGE_DEFAULTS = {
     "max_unique_colors": 8,
     "max_speckles": 40,
@@ -539,12 +1094,36 @@ TRIAGE_DEFAULTS = {
     "bucket_cap": 2,
     "learn_min_rejections": 3,
     "learn_min_jobs": 2,
+    # Phase 1 gate thresholds with no counterpart in spec.example.json, plus one
+    # that deliberately mirrors the geometry block so the gate and Layer A cannot
+    # drift apart.  ``max_mae_art`` and ``borderline_mae_art`` are the artwork-MAE
+    # cliff and noise floor compare_candidates.py already sorts on (MAE_ART_FAIL
+    # 8.0, drift above 1.0); keeping them here means a spec can retune the gate
+    # without editing that script.
+    "max_nodes_per_path": 500,
+    "max_mae_art": 8.0,
+    "borderline_mae_art": 1.0,
 }
 
 
 def triage_defaults():
     """Return a fresh copy of the ``triage`` block defaults."""
     return dict(TRIAGE_DEFAULTS)
+
+
+def thresholds_of(candidate):
+    """The effective ``triage`` thresholds for one candidate.
+
+    A candidate may carry its run's merged ``triage`` block -- the assembler fills
+    it with ``load_triage(spec)`` -- in which case those values win, so a spec.json
+    override reaches the gate rules themselves and not just the config table.  A
+    candidate carrying no block, or none at all, gets the documented defaults.
+
+    This is why the rules take a candidate rather than a threshold dict: one
+    candidate in, one complete set of thresholds out, with no hidden global state,
+    so gating a list of candidates from two runs with different specs is safe.
+    """
+    return load_triage(candidate if isinstance(candidate, dict) else None)
 
 
 def load_triage(spec):
@@ -554,9 +1133,13 @@ def load_triage(spec):
     ``triage`` key yields the defaults; present keys win, one at a time.  Keys the
     defaults do not know are carried through untouched, so a newer spec can add a
     knob without this module discarding it.
+
+    Also used per candidate by ``thresholds_of``: the same merge applies to the
+    candidate's own ``triage`` block, which is how a spec's thresholds reach the
+    gate.
     """
     merged = triage_defaults()
-    if spec:
+    if isinstance(spec, dict):
         block = spec.get("triage") or {}
         for key, value in block.items():
             merged[key] = value
@@ -582,6 +1165,31 @@ def _selftest():
     assert bucket_of("bw", 3, 2) != bucket_of("poster", 3, 2)
     assert gate({}).disposition is Disp.OK
     assert load_triage({"triage": {"max_speckles": 7}})["max_speckles"] == 7
+
+    # Phase 1 gates: a hard signal drops, weak signals need weak_needed of them.
+    lost = {"sweep": {"preset": "bw"},
+            "comparison": {"fidelity": {"measured": True, "mae_art": 104.2}}}
+    assert gate(lost).disposition is Disp.DROP, "artwork lost must drop"
+    weak = {"sweep": {"preset": "poster"},
+            "comparison": {"rendered_ink_colors": 5, "node_count_max": 120,
+                           "metrics": {"speckle_count": 55, "luma_delta": 6}}}
+    assert gate(weak).disposition is Disp.OK, "two weak hits must not demote"
+    assert gate(weak).reasons == ["SPECKLE_HEAVY", "LOW_LUMA_CONTRAST"]
+    weak["comparison"]["declared_colors"] = 8
+    demoted = gate(weak)
+    assert demoted.disposition is Disp.DEMOTE
+    assert demoted.reasons == ["SPECKLE_HEAVY", "COLORS_NEAR_CAP",
+                              "LOW_LUMA_CONTRAST"]
+    assert demoted.bucket == bucket_of("poster", 55, 8)
+
+    # Phase 3: tf-idf groups near-duplicate intent and keeps digits.
+    idf, vectors = tfidf_vectors(["tracer bw cutout 8", "tracer bw cutout 16",
+                                  "poster sunset landscape"])
+    assert intent_groups(vectors) == [[0, 1], [2]], "intent grouping unstable"
+    scores = tfidf_query("tracer bw cutout 8", idf, vectors)
+    assert scores[0] > scores[1] > scores[2], scores
+    assert tfidf_query("filter_speckle=8", idf, vectors) != \
+        tfidf_query("filter_speckle=16", idf, vectors)
     print("triage selftest OK")
     return 0
 

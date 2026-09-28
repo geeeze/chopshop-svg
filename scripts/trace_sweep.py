@@ -75,6 +75,13 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 import front_common as fc  # noqa: E402
 
+# Phase 2 learning store.  Guarded: stamping a checksum sidecar is provenance,
+# never a reason for the trace stage to fail (see #triage-events-stamp-checksum).
+try:
+    import triage_events  # noqa: E402
+except Exception:  # noqa: BLE001
+    triage_events = None
+
 # Documented VTracer parameter maps per preset.  Keys are VTracer parameter
 # names exactly as the tracer spells them (CLI flag minus "--", or the Python
 # API keyword).  Values chosen so bw/poster/photo are meaningfully distinct.
@@ -405,6 +412,18 @@ def _trace_one(task):
     try:
         _trace(backend, work_png, task["out_svg"], task["params"])
         record["output_sha256"] = fc.sha256_file(task["out_svg"])
+        # #triage-events-stamp-checksum: checksum-at-creation.  The tracer just
+        # wrote this candidate, so stamp its digest beside it now -- reusing the
+        # hash computed for sweep.json rather than reading the file twice.  The
+        # sidecar is what lets a later stage prove the candidate it compares is
+        # the candidate that was traced.  Best-effort: never fail a trace over
+        # provenance.
+        if triage_events is not None:
+            try:
+                triage_events.stamp_checksum(task["out_svg"],
+                                             sha=record["output_sha256"])
+            except Exception:  # noqa: BLE001
+                pass
     except Exception as exc:  # noqa: BLE001
         record["error"] = "%s: %s" % (type(exc).__name__, exc)
     return record
