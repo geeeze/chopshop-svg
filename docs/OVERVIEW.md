@@ -11,7 +11,7 @@ printers reject files and re-quote jobs.
 > **Scope note:** this document covers the **print check** (the two gates and the
 > reasoning behind them). The project has since grown a **trace stage** that turns
 > a *raster* into vector candidates before the print check ever runs — see
-> `README.md`, `scripts/TRACE_STAGE.md`, and the stage table below. The design
+> `../README.md`, `../scripts/TRACE_STAGE.md`, and the stage table below. The design
 > reasoning here still holds; the "not built" caveats in the stage table were
 > resolved when the trace stage shipped.
 
@@ -248,7 +248,7 @@ against 0.00–0.20% for every flat file in the batch.
 
 The trace stage adds its own suites (prep, trace sweep, comparison, pick/loop,
 palette variants, run record, requirements closeout); see
-`scripts/TRACE_STAGE.md` and `README.md` for that coverage.
+`../scripts/TRACE_STAGE.md` and `../README.md` for that coverage.
 
 **Regression guards for the two measurement traps**, with synthetic fixtures so
 they can't silently return:
@@ -323,7 +323,7 @@ SPEC=other.json ./pipeline.sh x.svg            # different spec
 .venv/bin/python scripts/snap_colors.py 00_source/art.svg spec.json --dry-run
 .venv/bin/python scripts/snap_colors.py 00_source/art.svg spec.json -o 03_cleaned/art.svg
 
-# node reduction — the geometry_overload remedy (§5 of scripts/NODE_REDUCTION.md).
+# node reduction — the geometry_overload remedy (§5 of ../scripts/NODE_REDUCTION.md).
 # Target the over-gate paths only; rewriting the whole file makes things worse.
 .venv/bin/python scripts/node_reduce.py 02_traced/00-example/candidate_11.svg \
     --out reduced.svg --max-nodes 500 --verify
@@ -372,8 +372,8 @@ spec.example.json          annotated starting point
 pipeline.sh                runs both gates, writes the manifest
 validate_svg.py            Layer A — source validation
 preflight.py               Layer B — render preflight
-HOWTO-print-check.md       practical usage guide + full settings table
-OVERVIEW.md                this document
+docs/HOWTO-print-check.md  practical usage guide + full settings table
+docs/OVERVIEW.md           this document
 scripts/snap_colors.py     stage 3 — colour snapping
 scripts/svgo_print.yml     stage 3 — SVGO config (needs Node.js)
 scripts/run_batch.py       batch runner

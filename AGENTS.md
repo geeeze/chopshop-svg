@@ -202,7 +202,7 @@ comparison, or prep behaviour.
   manifest (`--from-final`), and can gate each variant through the print check
   (`--preflight`). An explicit `map` always beats its area/nearest heuristic --
   the heuristic cannot recover intent. Never picks a winner.
-- `OVERVIEW.md`, `HOWTO-print-check.md` — design and print-check walkthrough.
+- `docs/OVERVIEW.md`, `docs/HOWTO-print-check.md` — design and print-check walkthrough.
 - `spec.json` / `spec.example.json` — the job contract (trace-stage keys are
   under `print`: `assume_opaque_bg`, `prep_colors`, `background_hex`,
   `sweep_max_candidates`, `invert`).

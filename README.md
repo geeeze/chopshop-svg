@@ -511,9 +511,9 @@ broken.
 
 ## More reading
 
-- `OVERVIEW.md` — what the project is, why there are two gates, and the design
+- `docs/OVERVIEW.md` — what the project is, why there are two gates, and the design
   reasoning. Start here.
-- `HOWTO-print-check.md` — running and reading the print check: the garment
+- `docs/HOWTO-print-check.md` — running and reading the print check: the garment
   setting, every rule and its severity, the measurement caveats, and the stage 3
   helpers.
 - `scripts/TRACE_STAGE.md` — the trace stage in detail (sweep, fidelity metric,

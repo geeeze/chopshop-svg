@@ -236,7 +236,7 @@ pure Python.
 Edit `spec.json`. Everything under `print` is optional; any omitted key falls
 back to its default. The complete field-by-field reference (top-level,
 `geometry`, `validation`, and `print`, with defaults and meanings) is in the
-**"The job contract"** section of `README.md` — it is the single canonical
+**"The job contract"** section of `../README.md` — it is the single canonical
 table, so it is not duplicated here.
 
 Two knobs deserve the extra context the table can't carry:
