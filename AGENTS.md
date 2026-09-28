@@ -208,6 +208,19 @@ comparison, or prep behaviour.
   `sweep_max_candidates`, `invert`).
 - `requirements.txt` — required + optional deps, with install notes.
 
+## Hard policy (binding, in addition to the hard rules above)
+
+1. **This repo is PUBLIC.** Never commit hostnames, private IPs, VPN names, or
+   SwarmUI/ComfyUI references. `sync-skills` enforces this for `skills/`.
+2. **Work in progress, blockers, and caveats live in `CONTEXT.md`** at the root
+   — keep it current as work lands. A landed feature moves out of WIP; a caveat
+   gets recorded there rather than drifting across README/OVERVIEW.
+3. **System tools live in the container, not the host.** Inkscape, Ghostscript,
+   qpdf, poppler-utils and potrace are baked into the `chopshop-svg` image by
+   the Dockerfile (`apt-get install …`). The host is deliberately bare; a
+   `which inkscape` returning empty on the host is expected and not a defect.
+   The pipeline runs containerised (`docker compose run --rm chopshop …`).
+
 ## Agent skills
 
 ### Issue tracker
