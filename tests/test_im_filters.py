@@ -212,6 +212,40 @@ def test_identity_argv_carries_no_defines():
     assert "-define" not in argv
 
 
+def test_every_transcoding_preset_excludes_the_clock_chunks():
+    """The output must be REPRODUCIBLE, and ImageMagick's default is not.
+
+    IM stamps `date:create`, `date:modify` and `date:timestamp` tEXt chunks into
+    every PNG it writes, so two runs of the same preset a second apart differ
+    byte for byte while the pixels are identical. That is what made
+    `test_parallel_matches_sequential` pass alone and fail in a full-file run:
+    it compares a workers=1 build against a workers=3 build byte for byte, and
+    the two only agreed when they happened to land in the same second.
+
+    Pinned here because the failure mode is invisible without ImageMagick
+    installed (the suite's ImageMagick tests skip on a bare host), so this
+    assertion is the only thing standing between the flag and a silent
+    regression. `-strip` would also remove the chunks but takes profiles with
+    them, which is wrong for print colour -- hence the targeted define.
+    """
+    # BOTH palette files the remapped presets ask for: `remap-spec` needs
+    # `spec`, and supplying only `auto` makes filter_argv RAISE rather than
+    # return an argv -- which reads as a missing flag and is not one.
+    palettes = {"auto": "/tmp/pal.png", "spec": "/tmp/pal-spec.png"}
+    presets = sorted(set(imf.PRESETS) | set(imf.REMAPPED))
+    # `identity` is the byte-exact CONTROL: it is copied, not transcoded, so it
+    # carries no defines at all -- see test_identity_argv_carries_no_defines.
+    transcoding = [p for p in presets if p != "identity"]
+    assert transcoding, "there must be presets that actually transcode"
+    for preset in transcoding:
+        argv = imf.filter_argv("magick", "i", "o", preset, None, palettes)
+        assert "png:exclude-chunk=date,time" in argv, \
+            "%s would emit a timestamped PNG and stop being reproducible" % preset
+        # And it must be a SETTING, i.e. before the output path, or it applies
+        # to nothing -- the same trap the montage flags document.
+        assert argv.index("png:exclude-chunk=date,time") < len(argv) - 1, preset
+
+
 def test_remap_dither_variants_differ_in_argv():
     """The two readings on each palette axis must be distinguishable."""
     palettes = {"auto": "/tmp/pal.png"}
@@ -494,10 +528,16 @@ def test_remap_without_a_spec_palette_is_skipped_not_guessed(tmp_path):
 def test_parallel_matches_sequential(tmp_path):
     """Parallelism is an optimisation; it must not change the result.
 
-    Byte comparison is a legitimate invariant here, not a fragile one:
-    ImageMagick's PNG output was measured to be byte- and pixel-identical
-    across 12 CONCURRENT identical conversions (one md5, one pixel hash), and
-    it writes no timestamps -- only ``dpi`` and ``chromaticity`` chunks.
+    Byte comparison is a legitimate invariant here BECAUSE the output was made
+    reproducible: ImageMagick stamps every PNG with `date:create`,
+    `date:modify` and `date:timestamp` tEXt chunks, which is why this test used
+    to pass when run alone (both builds inside one second) and fail in a
+    full-file run (slow enough to straddle a second boundary). The earlier
+    version of this docstring claimed ImageMagick "writes no timestamps --
+    only dpi and chromaticity chunks", and that claim was simply false: it was
+    the reason the byte comparison looked safe when it was not.
+    `im_filters.filter_argv` now passes `-define png:exclude-chunk=date,time`,
+    so the PNGs carry no clock and the comparison is about the pixels again.
     """
     src = write_png(str(tmp_path / "art.png"), THREE_FLAT)
     presets = ["identity", "flatten", "flat6"]

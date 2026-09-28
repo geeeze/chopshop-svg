@@ -374,6 +374,23 @@ def filter_argv(driver, src, dst, preset, flatten_hex=None, palettes=None):
         # truecolour gives the rest of the chain ONE colour type.  `identity`
         # is excluded because it is the byte-exact control.
         argv += ["-define", "png:color-type=2"]
+        # REPRODUCIBLE OUTPUT.  ImageMagick stamps every PNG it writes with
+        # `date:create`, `date:modify` and `date:timestamp` tEXt chunks, so two
+        # runs of the same preset a second apart are never byte-identical even
+        # though the pixels are.  That is not cosmetic here: this bench's whole
+        # contract is that parallelism is an OPTIMISATION that must not change
+        # the result, and `test_parallel_matches_sequential` compares a
+        # workers=1 build against a workers=3 build byte for byte.  It passed
+        # when run alone (both builds inside the same second) and failed in a
+        # full-file run (5.7s, straddling a second boundary) -- a
+        # time-dependent test hiding a real reproducibility hole.
+        #
+        # `png:exclude-chunk=date,time` removes exactly those chunks. Measured
+        # in IM 7.1.1-43: bare writes all three; `+set date:create +set
+        # date:modify` still writes `date:timestamp`; `-strip` also removes
+        # profiles, which is wrong for print colour, so the targeted define is
+        # the one used.
+        argv += ["-define", "png:exclude-chunk=date,time"]
     argv.append(dst)
     return argv
 
