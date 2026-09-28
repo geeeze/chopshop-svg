@@ -220,6 +220,11 @@ comparison, or prep behaviour.
    the Dockerfile (`apt-get install …`). The host is deliberately bare; a
    `which inkscape` returning empty on the host is expected and not a defect.
    The pipeline runs containerised (`docker compose run --rm chopshop …`).
+4. **Comments are section-level blocks that carry the WHY, not line-by-line
+   narration.** Inside a system that spans files or repos, plant a small
+   `#label-name-function` breadcrumb at the key call sites so a reader can trace
+   the thread across the codebase. The breadcrumb is a navigation tag, never a
+   restatement of the code.
 
 ## Agent skills
 
