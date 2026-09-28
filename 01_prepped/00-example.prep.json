@@ -47,7 +47,7 @@
   },
   "inverse": {
     "derived_from": "00-example.prepped.png",
-    "file": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.inverse.png",
+    "file": "01_prepped/00-example.prepped.inverse.png",
     "mode": "photometric",
     "note": "colour-inverted twin; the original prepped file is unchanged and remains the traced input unless a caller asks otherwise",
     "ran": true,
@@ -62,7 +62,7 @@
   "notes": [],
   "output": {
     "container": "png",
-    "file": "/home/monop/Documents/GitHub/chopshop-svg/01_prepped/00-example.prepped.png",
+    "file": "01_prepped/00-example.prepped.png",
     "sha256": "05cd812cf768261616f30380c76bd075df06d5883b36e186f3f7a2c7ba89c002",
     "size_bytes": 9617,
     "size_px": [
