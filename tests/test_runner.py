@@ -215,3 +215,59 @@ def test_run_jev_reports_a_skipped_annotator_with_its_reason(tmp_path, monkeypat
         assert "JEV_API_KEY is not set" in str(exc)
     else:
         raise AssertionError("a skipped annotation must not return an envelope")
+
+
+# ------------------------------------------------------------ recolour seam --
+#
+# The studio's "cycle colours" preview recolours a candidate SVG without a
+# raster round-trip. These pin the pure functions the /recolour routes delegate
+# to: the map validator refuses bad input, the colour lister names the distinct
+# paints, and the rewrite changes paint only (geometry, nodes, dimensions stay).
+
+def _min_svg():
+    # Two red shapes (so #c1272d is the most-declared colour) + one green.
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">'
+        '<rect x="0" y="0" width="4" height="4" fill="#c1272d"/>'
+        '<rect x="5" y="5" width="4" height="4" fill="#c1272d"/>'
+        '<circle cx="2" cy="2" r="1" fill="#3a5a32"/>'
+        "</svg>"
+    )
+
+
+def test_recolour_map_refuses_a_non_hex_value():
+    try:
+        runner.recolour_map({"#c1272d": "not-a-colour"})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a non-#rrggbb target must be refused, not dropped")
+
+
+def test_recolour_map_refuses_an_empty_map():
+    try:
+        runner.recolour_map({})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("an empty map is a client error, not a silent no-op")
+
+
+def test_recolour_map_accepts_hex_pairs():
+    assert runner.recolour_map({"#c1272d": "#5b2c6f"}) == {"#c1272d": "#5b2c6f"}
+
+
+def test_svg_colours_lists_distinct_paints_most_used_first(tmp_path):
+    svg = tmp_path / "art.svg"
+    svg.write_text(_min_svg(), encoding="utf-8")
+    assert runner.svg_colours(svg) == ["#c1272d", "#3a5a32"]
+
+
+def test_recolour_rewrites_paint_only(tmp_path):
+    svg = tmp_path / "art.svg"
+    svg.write_text(_min_svg(), encoding="utf-8")
+    out = runner.recolour_svg(svg, {"#c1272d": "#5b2c6f"}).decode("utf-8")
+    assert "#5b2c6f" in out
+    assert "#c1272d" not in out, "the mapped source colour must be gone"
+    assert "#3a5a32" in out, "an unmapped colour must be left alone"
+    assert 'width="10"' in out, "geometry/dimensions must be untouched"

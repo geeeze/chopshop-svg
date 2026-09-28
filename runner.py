@@ -23,6 +23,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 PROJECT = Path(os.environ.get("PIPELINE_ROOT", "/app"))
+# The repo root, resolved from this file — not PIPELINE_ROOT — so the recolour
+# seam below can import scripts/palette_variants whether the checkout is the
+# container (/app) or a host checkout the test suite imports this module from.
+HERE = Path(__file__).resolve().parent
 JOBS_ROOT = Path(os.environ.get("RUNNER_ROOT", "/data/jobs"))
 HOST_UPLOAD_ROOT = Path(os.environ.get("HOST_UPLOAD_ROOT", "/data/uploads"))
 CONTAINER_UPLOAD_ROOT = Path(os.environ.get("CONTAINER_UPLOAD_ROOT", "/data/uploads"))
@@ -465,6 +469,77 @@ def guarded(fn, item: dict) -> None:
         traceback.print_exc()
 
 
+# ----------------------------------------------------------- recolour seam --
+#
+# The studio's "cycle colours" preview recolours a candidate SVG without a
+# raster round-trip: only fill / stroke / stop-color change, geometry, node
+# count and dimensions are untouched. The actual rewrite is palette_variants'
+# tested apply_mapping (scripts/palette_variants.py); this module only exposes
+# it over HTTP and validates the caller's map. Imported lazily so the runner's
+# startup stays light and lxml/PIL are only pulled in when a recolour happens.
+# recolour-seam
+
+def _palette_variants():
+    import sys as _sys
+    _scripts = HERE / "scripts"
+    if str(_scripts) not in _sys.path:
+        _sys.path.insert(0, str(_scripts))
+    import palette_variants  # noqa: F401  (imports snap_colors + validate_svg)
+    return palette_variants
+
+
+def recolour_map(raw: dict) -> dict:
+    """Validate an explicit {source: target} recolour map.
+
+    Every key and value must be a plain ``#rrggbb``; anything else is refused
+    rather than silently dropped, so a typo cannot reach the artwork (the same
+    rule palette_variants' own --map parsing enforces). Raises ValueError on a
+    bad entry or an empty map.
+    """
+    pv = _palette_variants()
+    result = {}
+    for source, target in (raw or {}).items():
+        src = pv.as_hex(source)
+        dst = pv.as_hex(target)
+        if src is None or dst is None:
+            raise ValueError(
+                "recolour map needs #rrggbb pairs, got %r -> %r" % (source, target))
+        result[src] = dst
+    if not result:
+        raise ValueError("recolour map is empty")
+    return result
+
+
+def recolour_svg(svg_path: Path, mapping: dict) -> bytes:
+    """Rewrite one SVG's paint per mapping; return the recoloured bytes.
+
+    ``mapping`` is assumed already validated by :func:`recolour_map`. Geometry,
+    viewBox, width/height and node count are untouched by construction — only
+    fill/stroke/stop-color are written back through the CSS cascade.
+    """
+    pv = _palette_variants()
+    import io
+    tree, root, styles = pv.parse_svg(str(svg_path))
+    pv.apply_mapping(root, styles, mapping)
+    buffer = io.BytesIO()
+    tree.write(buffer, encoding="utf-8", xml_declaration=True)
+    return buffer.getvalue()
+
+
+def svg_colours(svg_path: Path) -> list:
+    """Distinct declared paint colours in one SVG, most-used first.
+
+    Element counts only (instant); rendered-area weights need an Inkscape pass
+    and belong to the variant report, not the live picker. Feeds the studio's
+    colour-cycling control so it can list "replace THIS colour".
+    """
+    pv = _palette_variants()
+    tree, root, styles = pv.parse_svg(str(svg_path))
+    counts = pv.declared_colours(root, styles)
+    return [colour for colour, _count
+            in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -671,6 +746,55 @@ class Handler(BaseHTTPRequestHandler):
                 # would read as "this runner has no such route", which is what
                 # sent the operator hunting for a wiring bug that was not there.
                 self.json_response(503, {"error": str(exc)})
+            return
+        if len(parts) == 1 and parts[0] == "recolour":
+            # Recolour one candidate SVG by an explicit {source: target} map and
+            # return the bytes inline, so the studio/browser renders the vector
+            # directly — the preview never rasterises. Geometry is untouched.
+            job = JOBS.get(str(body.get("job_id") or ""))
+            name = str(body.get("file") or "")
+            if not job or not re.fullmatch(r"[\w.\-]+", name):
+                self.json_response(400, {"error": "job_id and file are required"})
+                return
+            path = artifact_path(PROJECT, stem=job.get("stem", ""), name=name,
+                                 job_dir=Path(job["dir"]))
+            if not path or not path.is_file():
+                self.json_response(404, {"error": "no such file"})
+                return
+            try:
+                mapping = recolour_map(body.get("map") or {})
+                svg = recolour_svg(path, mapping)
+            except ValueError as exc:
+                self.json_response(400, {"error": str(exc)})
+                return
+            except Exception as exc:
+                self.json_response(500, {"error": "recolour failed: %s: %s"
+                                        % (type(exc).__name__, exc)})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "image/svg+xml")
+            self.send_header("Content-Length", str(len(svg)))
+            self.end_headers()
+            self.wfile.write(svg)
+            return
+        if len(parts) == 2 and parts[0] == "recolour" and parts[1] == "colours":
+            # List the distinct declared colours of one SVG, most-used first,
+            # so the studio's colour-cycling picker knows what it can replace.
+            job = JOBS.get(str(body.get("job_id") or ""))
+            name = str(body.get("file") or "")
+            if not job or not re.fullmatch(r"[\w.\-]+", name):
+                self.json_response(400, {"error": "job_id and file are required"})
+                return
+            path = artifact_path(PROJECT, stem=job.get("stem", ""), name=name,
+                                 job_dir=Path(job["dir"]))
+            if not path or not path.is_file():
+                self.json_response(404, {"error": "no such file"})
+                return
+            try:
+                self.json_response(200, {"file": name, "colours": svg_colours(path)})
+            except Exception as exc:
+                self.json_response(500, {"error": "recolour failed: %s: %s"
+                                        % (type(exc).__name__, exc)})
             return
         self.json_response(404, {"error": "unknown route"})
 
