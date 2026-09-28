@@ -1087,5 +1087,9 @@ source inspection would catch.
   render preflight as two gates, the hard/advisory table, the facts each layer
   owns (source, render, operator), and the diverse batch that exposed each
   measurement bug.
+- `references/runner-http-contract.md` — the `runner.py` HTTP surface that
+  Studio drives: auth, every route, the on-demand archive and its status
+  ladder, the file proxy, the disk gate, in-memory state, and the optional Jev
+  add-on's 503-not-404 rule.
 - `scripts/svg_edge_case_probe.py` — run a validator against a batch of
   degenerate SVGs and flag unexpected outcomes.
