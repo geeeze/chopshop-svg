@@ -1,2 +1,0 @@
-NOTE: document is 317.50mm wide but declares no viewBox, so all lengths are read as CSS px (1px = 0.2646mm)
-VALIDATION PASSED for 02_traced/00-example/candidate_07.svg
