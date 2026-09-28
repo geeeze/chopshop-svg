@@ -284,6 +284,42 @@ def record_shown(job, candidates, ranker=None, t=None, path=None):
 
 
 # --------------------------------------------------------------------------
+# #triage-events-read-shown
+# --------------------------------------------------------------------------
+
+def read_events(directory=None):
+    """Read every event line back as a dict, in FILE order (append order).
+
+    File order is the order the events were appended in, which is the closest
+    thing to chronology an append-only log has; the learners (see
+    ``scripts/triage_ranker.py``) impose their own sort on top of it so their
+    results cannot depend on it.
+
+    Tolerant by contract, like the rest of this module: a missing file, an
+    unreadable file, a truncated trailing line or a non-object line yields fewer
+    events, never an exception -- a learner that can crash a stage by finding a
+    half-written log would be worse than a learner with less data.
+    """
+    target = os.path.join(directory, EVENTS_FILENAME) if directory else events_path()
+    events = []
+    try:
+        with open(target, "r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(payload, dict):
+                    events.append(payload)
+    except OSError:
+        return []
+    return events
+
+
+# --------------------------------------------------------------------------
 # #triage-events-learned-buckets
 # --------------------------------------------------------------------------
 
