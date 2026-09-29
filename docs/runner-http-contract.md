@@ -37,6 +37,7 @@ A missing or wrong token answers `401 {"error": "unauthorized"}`.
 | POST | `/validations/:id/jev` | optional Jev add-on (see below) |
 | POST | `/recolour` | **unbuilt seam** — rewrite one candidate SVG's paint from an explicit `{src: dst}` map, return the SVG bytes inline |
 | POST | `/recolour/colours` | **unbuilt seam** — list one SVG's distinct declared colours, most-used first |
+| POST | `/compose` | **the composition operation** — merge inline layers (vector SVG strings + raster data-URIs) into one SVG with the vectors intact; returns the SVG inline |
 
 Anything else answers `404 {"error": "unknown route"}`.
 
@@ -116,6 +117,69 @@ dimensions untouched by construction (the work is
 `palette_variants.apply_mapping`, imported lazily so the runner's startup stays
 light). Errors: `400` for a missing `job_id`/`file` or a bad map, `404` when the
 artifact is not resolvable, `500` when a rewrite fails.
+
+## Composition — `POST /compose` (the studio consumes this)
+
+The pipeline traces one raster into SVG candidates and checks one SVG; it could
+not MERGE several pieces into one printable artwork until this route. The obvious
+implementation — rasterise the layers, then re-trace the composite — throws away
+the vectors the trace stage just produced (re-quantised colours, doubled node
+counts, lost text and geometry), so `/compose` merges instead: **every vector
+layer stays a vector**. The merge itself is `scripts/compose_svg.py`
+(`compose(spec) -> str`, also a CLI); the route adds only the envelope, the
+refusal status and the log line.
+
+Request: `{"op": "compose", "spec": {...}}`, where the spec is
+
+| key | meaning |
+|---|---|
+| `width`, `height` | output canvas in px — both required, both positive |
+| `background` | `#rrggbb` (a named SVG colour is accepted too) or `"transparent"` |
+| `palette` | OPTIONAL — the composite's OWN palette, applied to the merged result |
+| `layers` | required list, painted in order |
+
+Each layer is `{type, src, x, y, w, h, opacity, hue}`:
+
+- `type` is `"svg"` (a full inline SVG document string) or `"raster"` (an inline
+  `data:` URI). **`src` is ALWAYS inline** — compose never touches the
+  filesystem for layer content, so a compose request cannot read the runner's
+  disk (a raster `src` that is a path is refused, not resolved).
+- `x`/`y` place the layer; `w`/`h` size it (both positive).
+- A VECTOR layer's inline SVG is parsed and its inner content wrapped in
+  `<g transform="translate(x,y) scale(w/nw, h/nh)" opacity="...">`, where
+  `(nw, nh)` is the layer's natural size: its `viewBox` when it has one,
+  otherwise its `width`/`height`. A viewBox with a non-zero origin is offset back
+  into place, so a layer drawn around (100, 100) still lands where the caller
+  asked. A layer with neither a viewBox nor a width/height is refused.
+- `hue` on a vector layer becomes an `feColorMatrix type="hueRotate"` filter in
+  `<defs>` (one unique id per layer, checked against ids the layers already
+  carry) — a FILTER ELEMENT, not a CSS `filter:` declaration, because a
+  rasteriser (rsvg, an Inkscape export) honours the former and would silently
+  ignore the latter, leaving a preview that looks right and a print that is
+  wrong.
+- A RASTER layer embeds verbatim as `<image href="data:..." x y width height
+  opacity>`. `hue` on a raster layer is NOT applied yet (a documented
+  follow-up): it is reported in the runner's log rather than silently dropped.
+
+If the spec carries a `palette`, the merged document's `fill` / `stroke` /
+`stop-color` are snapped to it through `snap_colors.py`'s own colour maths (its
+`PROPS` / `nearest_palette` / `write_property`, driven over the merged tree
+through the same CSS cascade — imported, not re-implemented).
+A near miss is snapped; a colour further than the tolerance is a FINDING, not an
+error. The composite owns the palette, so a colour it did not ask for is logged
+and left in place, never forced onto a nearest match and never a reason to fail
+the merge. The canvas background is part of that pass (it is a `fill`), so a
+palette that omits the canvas colour reports it.
+
+Responses: `200` with `Content-Type: image/svg+xml` and the merged SVG as the
+body. A spec that cannot be merged — no `width`/`height`, no `layers`, an unknown
+layer type, an inline layer SVG with neither a viewBox nor a width/height, a
+raster `src` that is not a data URI, a palette entry that is not a colour — is
+`422 {"error": ..., "kind": "invalid_spec"}`; a missing or non-object `spec`
+(a body that is not a JSON object at all included) is the same `422` envelope,
+naming what was missing. `500` is only for a merge that fails unexpectedly.
+Off-palette colours and an unapplied raster hue never change the status: they are
+logged, and the merged SVG is returned.
 
 ## Disk gate
 

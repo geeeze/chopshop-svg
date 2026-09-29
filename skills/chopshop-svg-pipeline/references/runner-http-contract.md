@@ -33,6 +33,7 @@ A missing or wrong token answers `401 {"error": "unauthorized"}`.
 | POST | `/validations/:id/jev` | optional Jev add-on (see below) |
 | POST | `/recolour` | **unbuilt seam** (no consumer) — rewrite one candidate SVG's paint from an explicit `{src: dst}` map, return the SVG bytes inline |
 | POST | `/recolour/colours` | **unbuilt seam** (no consumer) — list one SVG's distinct declared colours, most-used first |
+| POST | `/compose` | **the studio consumes this** — merge inline layers into one SVG with the vectors intact; returns the SVG inline |
 
 Anything else answers `404 {"error": "unknown route"}`.
 
@@ -129,6 +130,30 @@ settles to `done`.
   and an ambiguous request without it is `400` (never a guess). The stream is
   `<stem>.dataset.7z` (attachment) and the temporary archive is unlinked in a
   `finally`.
+
+## Composition (`POST /compose`) — the studio consumes this
+
+The MISSING composition operation: merge layers into one printable SVG WITHOUT
+rasterising, so every vector layer stays a vector. Body `{op: "compose", spec}`,
+spec `{width, height, background, palette?, layers[]}`, each layer
+`{type: "svg"|"raster", src, x, y, w, h, opacity, hue}`. `src` is ALWAYS inline
+(an SVG document string, or a `data:` URI) — the route never touches the
+filesystem, so it cannot read the runner's disk.
+
+Vector layers land as `<g transform="translate(x,y) scale(w/nw,h/nh)" opacity>`
+where `(nw, nh)` is the layer's natural size (its viewBox, else width/height); a
+non-zero viewBox origin is offset back into place. A `hue` becomes an
+`feColorMatrix type="hueRotate"` filter element — NOT a CSS filter, which rsvg
+and Inkscape export would ignore. Raster layers embed as `<image href="data:…">`;
+`hue` on a raster layer is a documented follow-up (reported, not dropped). A
+`palette` snaps the merged paint through `snap_colors`' own colour maths
+(`nearest_palette` / `write_property`, same CSS cascade); a colour further than
+tolerance is REPORTED and left alone, never forced.
+
+`200 image/svg+xml` with the merged document. An unmergeable spec is
+`422 {"error", "kind": "invalid_spec"}`. Implementation: `scripts/compose_svg.py`
+(pure `compose(spec) -> str`, plus a CLI; exit 0 merged, 2 bad usage, 3 invalid
+spec).
 
 ## Disk gate
 

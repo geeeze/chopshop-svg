@@ -285,7 +285,8 @@ chopshop-svg/
 │                              #   (+ the spec-gated expanded prep benches)
 ├── pipeline.sh                # PRINT CHECK: validate + preflight a chosen SVG
 ├── runner.py                  # HTTP runner: POST /jobs, GET /jobs/:id,
-│                              #   GET /files/:job_id/<name>, DELETE /jobs/:id
+│                              #   GET /files/:job_id/<name>, DELETE /jobs/:id,
+│                              #   POST /compose (the vector-preserving merge)
 │                              #   (see docs/runner-http-contract.md)
 ├── validate_svg.py            # Layer A — source-level SVG checks
 ├── preflight.py               # Layer B — render + colour/ink/coverage checks
@@ -315,6 +316,8 @@ chopshop-svg/
 │   ├── tune_sweep.py          # bench: re-trace one raster under many parameters
 │   ├── node_reduce.py         # bench: the geometry_overload remedy (over-gate paths)
 │   ├── snap_colors.py         # snap a trace's colours to a palette
+│   ├── compose_svg.py         # merge layers into one SVG, vectors intact (the
+│   │                          #      composition operation — POST /compose)
 │   ├── palette_variants.py    # aux: re-colour a finished trace onto named palettes
 │   │                          #      (standalone — nothing in the pipeline calls it)
 │   ├── palettes.json          # palette library for palette_variants.py
@@ -690,6 +693,67 @@ Six starting palettes — `red-cream`, `blue-charcoal`, `turquoise-black`,
 `cool-luxe`, `warm-sunny`, `pop-playful`. Each entry is a `background`, a
 `colours` list and an optional `map`. Adding your own is plain JSON; a colour
 that is not a real `#rrggbb` is rejected rather than written into the artwork.
+
+---
+
+## Composition (`scripts/compose_svg.py` + `POST /compose`) — the vector-preserving merge
+
+The **missing composition operation**. The pipeline traces one raster into SVG
+candidates and print-checks one SVG; it could not MERGE several pieces into a
+single printable artwork. The obvious fix — rasterise the layers and re-trace the
+composite — throws away the vectors the trace stage just produced (re-quantised
+colours, doubled node counts, lost text and geometry). This merges instead, and
+**keeps every vector layer a vector**.
+
+```bash
+# Merge a layer stack into one SVG
+.venv/bin/python scripts/compose_svg.py composite.spec.json -o composite.svg
+.venv/bin/python scripts/compose_svg.py - < composite.spec.json > composite.svg
+```
+
+```json
+{
+  "width": 3000, "height": 3000,
+  "background": "#ffffff",
+  "palette": ["#111111", "#ff0000"],
+  "layers": [
+    {"type": "svg",    "src": "<svg …</svg>",         "x": 0, "y": 0, "w": 300, "h": 300, "opacity": 1.0, "hue": 0},
+    {"type": "raster", "src": "data:image/png;base64,…", "x": 0, "y": 0, "w": 300, "h": 300, "opacity": 1.0, "hue": 0}
+  ]
+}
+```
+
+`src` is always INLINE — an SVG document string or a `data:` URI — so compose
+never touches the filesystem for layer content.
+
+- **Vector layer** → the layer's inline SVG is parsed and its inner content
+  wrapped in `<g transform="translate(x,y) scale(w/nw, h/nh)" opacity="…">`,
+  where `(nw, nh)` is the layer's natural size: its `viewBox` when it has one,
+  otherwise its `width`/`height`. (A non-zero viewBox origin is offset back into
+  place, so a layer drawn around (100, 100) still lands where you asked.) No
+  re-tracing, no node reduction, no colour re-sampling.
+- **`hue`** → an `feColorMatrix type="hueRotate"` filter in `<defs>`, one unique
+  id per layer. A FILTER ELEMENT rather than a CSS `filter:` declaration,
+  because a rasteriser (rsvg, an Inkscape export) honours the element and would
+  silently ignore the CSS, which looks correct in a preview and wrong on film.
+- **Raster layer** → `<image href="data:…" x y width height opacity>`, embedded
+  verbatim. `hue` on a raster layer is a documented follow-up: it is reported,
+  never silently dropped.
+- **`palette`** → the merged document's `fill` / `stroke` / `stop-color` are
+  snapped through `snap_colors.py`'s own colour maths (`nearest_palette` /
+  `write_property`, driven over the merged tree through the same CSS cascade —
+  imported, not re-implemented). A near miss is snapped; a colour further than
+  the tolerance is a **finding, not an error** — it is reported and left in
+  place, because a palette the composite owns should not be used to silently
+  force a nearest colour.
+
+Exit codes: **0** merged (off-palette colours are reported on stderr, not fatal)
+· **2** bad usage · **3** invalid spec. Tests: `tests/test_compose_svg.py`.
+
+The runner exposes the same function as `POST /compose` for Chopshop Studio:
+`{"op": "compose", "spec": {…}}` in, `200 image/svg+xml` with the merged document
+out; an unmergeable spec is `422 {"error": …, "kind": "invalid_spec"}`. See
+`docs/runner-http-contract.md`.
 
 ---
 

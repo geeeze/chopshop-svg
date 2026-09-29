@@ -1,4 +1,9 @@
 import importlib.util
+import json
+import threading
+import urllib.error
+import urllib.request
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 
@@ -271,3 +276,109 @@ def test_recolour_rewrites_paint_only(tmp_path):
     assert "#c1272d" not in out, "the mapped source colour must be gone"
     assert "#3a5a32" in out, "an unmapped colour must be left alone"
     assert 'width="10"' in out, "geometry/dimensions must be untouched"
+
+
+# --------------------------------------------------------------- compose ---
+#
+# POST /compose is the COMPOSITION operation: the studio hands over the whole
+# layer stack inline and gets one merged SVG back with the vectors intact. These
+# pin the route's two jobs -- refusing a spec it cannot merge with the
+# invalid_spec envelope the studio switches on, and answering image/svg+xml
+# rather than JSON -- plus the fact that layer content is inline only, so a
+# compose request cannot read the runner's disk.
+
+def _compose_body(spec):
+    return {"op": "compose", "spec": spec}
+
+
+def _inline_layer(width="300", height="200", x=0, y=0, w=300, h=200):
+    return {
+        "type": "svg",
+        "src": ('<svg xmlns="http://www.w3.org/2000/svg" width="%s" height="%s">'
+                '<rect width="10" height="10" fill="#111111"/></svg>'
+                % (width, height)),
+        "x": x, "y": y, "w": w, "h": h, "opacity": 1.0, "hue": 0,
+    }
+
+
+def _post_json(path, payload):
+    """POST to a private Handler instance; returns (status, headers, body)."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), runner.Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            "http://127.0.0.1:%d%s" % (server.server_address[1], path),
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return response.status, response.headers, response.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.headers, exc.read()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_compose_problem_names_the_missing_piece():
+    assert "width" in runner.compose_problem({"height": 10, "layers": []})
+    assert "height" in runner.compose_problem({"width": 10, "layers": []})
+    assert "layers" in runner.compose_problem({"width": 10, "height": 10})
+    assert "list" in runner.compose_problem(
+        {"width": 10, "height": 10, "layers": {}})
+    assert runner.compose_problem("not a spec") == "compose needs a spec object"
+    assert runner.compose_problem(
+        {"width": 10, "height": 10, "layers": []}) is None
+
+
+def test_compose_route_returns_one_merged_svg_inline(monkeypatch):
+    monkeypatch.setattr(runner, "TOKEN", "")
+    status, headers, body = _post_json("/compose", _compose_body({
+        "width": 600, "height": 400, "background": "#ffffff",
+        "layers": [_inline_layer(x=10, y=20, w=300, h=200),
+                   _inline_layer("100", "100", x=0, y=0, w=100, h=100)],
+    }))
+    assert status == 200
+    assert headers.get("Content-Type") == "image/svg+xml"
+    text = body.decode("utf-8")
+    # The merged document, with each vector layer as a transformed group --
+    # proof it did not rasterise and re-trace.
+    assert 'viewBox="0 0 600 400"' in text
+    assert 'transform="translate(10,20) scale(1,1)"' in text
+    assert text.count("<g ") == 2
+
+
+def test_compose_route_refuses_a_spec_with_no_canvas(monkeypatch):
+    monkeypatch.setattr(runner, "TOKEN", "")
+    status, _headers, body = _post_json(
+        "/compose", _compose_body({"layers": [_inline_layer()]}))
+    assert status == 422
+    payload = json.loads(body)
+    assert payload["kind"] == "invalid_spec"
+    assert "width" in payload["error"]
+
+
+def test_compose_route_refuses_an_unmergeable_layer(monkeypatch):
+    """A layer the merge cannot size is a client error, not a 500."""
+    monkeypatch.setattr(runner, "TOKEN", "")
+    layer = _inline_layer()
+    layer["src"] = '<svg xmlns="http://www.w3.org/2000/svg"/>'   # no size
+    status, _headers, body = _post_json("/compose", _compose_body({
+        "width": 100, "height": 100, "layers": [layer],
+    }))
+    assert status == 422
+    assert json.loads(body)["kind"] == "invalid_spec"
+
+
+def test_compose_route_refuses_a_raster_layer_that_is_a_path(monkeypatch):
+    """Layer content is inline: the route must not read the runner's disk."""
+    monkeypatch.setattr(runner, "TOKEN", "")
+    status, _headers, body = _post_json("/compose", _compose_body({
+        "width": 100, "height": 100,
+        "layers": [{"type": "raster", "src": "/etc/hostname", "x": 0, "y": 0,
+                    "w": 10, "h": 10}],
+    }))
+    assert status == 422
+    assert json.loads(body)["kind"] == "invalid_spec"
+    assert b"data:" in body

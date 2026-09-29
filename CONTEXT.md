@@ -86,6 +86,10 @@ is which candidate to print.
     1.1 renderers, so a spatial variant carries its matrix on one wrapping
     `<g>` and the root's viewBox/width/height are rewritten only where the axes
     exchange. Do not "simplify" that back onto the root element.
+- Also landed: the **composition operation** — `scripts/compose_svg.py` (pure
+  `compose(spec) -> str` plus a CLI) and its `POST /compose` route on the runner,
+  which merge inline layers into one SVG with every vector layer still a vector
+  (see "Composition" in `README.md` and `docs/runner-http-contract.md`).
 - No other tracked in-flight feature at the time of writing. If you start one,
   list it here with an owner and a note.
 
@@ -164,6 +168,16 @@ is which candidate to print.
   `POST /recolour/colours` are implemented and unit-tested, but no studio
   consumer exists — the colour-cycling preview they were written for was never
   built. Do not assume a UI behind them; see `docs/runner-http-contract.md`.
+- **The composition operation (`POST /compose`, `scripts/compose_svg.py`) is
+  built and has a consumer** (the studio sends the layer stack inline). Two
+  things it does NOT do yet: `hue` on a RASTER layer is skipped (reported in the
+  runner's log, never applied), and colliding layer `id`s are merged as-is, so a
+  caller handing in two layers that both define `#gradient1` owns that clash.
+  Its palette pass composes `snap_colors.py`'s own colour maths
+  (`PROPS` / `nearest_palette` / `write_property`) with a mirrored walk, because
+  `AGENTS.md` keeps `snap_colors.py` off limits for edits — if that module ever
+  learns a new paint property or colour source, compose's loop has to learn it
+  too.
 
 ## Doc layout note (2026-09-28)
 

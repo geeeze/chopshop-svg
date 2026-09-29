@@ -747,6 +747,52 @@ def svg_colours(svg_path: Path) -> list:
             in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
 
 
+# ------------------------------------------------------------ compose seam --
+#
+# The COMPOSITION operation (2026-09-29). POST /compose merges several layers
+# into one printable SVG WITHOUT rasterising: each vector layer stays a vector (a
+# <g> with a translate+scale transform), each raster layer embeds as an <image>
+# data URI, and the merged document is snapped to the composite's own palette
+# through snap_colors' cascade-aware logic. The studio holds the layer stack and
+# is the consumer of this seam (unlike the recolour seam above, which nothing
+# calls); this module only exposes scripts/compose_svg.py over HTTP. The merge
+# itself, its validation and its exit codes live in that script -- a second
+# implementation here would drift from the one the CLI runs.
+#
+# Inline only: every layer's src is an SVG string or a data URI, so the route
+# never resolves a path and a compose request cannot read the runner's disk.
+# compose-seam
+
+def _compose_module():
+    import sys as _sys
+    _scripts = HERE / "scripts"
+    if str(_scripts) not in _sys.path:
+        _sys.path.insert(0, str(_scripts))
+    import compose_svg  # noqa: F401  (imports snap_colors + validate_svg)
+    return compose_svg
+
+
+def compose_problem(spec) -> str | None:
+    """Why this spec cannot even start a compose, or None when it can.
+
+    Only the structural emptiness is checked here: a missing canvas or no layers
+    at all is a client error this layer can name precisely, which matters because
+    the studio shows the reason. Everything else (an unparseable inline SVG, an
+    unknown layer type, a transform the natural size cannot be derived for) is
+    compose_svg.SpecError's business, so exactly one place decides what a usable
+    spec is.
+    """
+    if not isinstance(spec, dict):
+        return "compose needs a spec object"
+    for key in ("width", "height", "layers"):
+        value = spec.get(key)
+        if value is None or value == "":
+            return "spec is missing %s" % key
+    if not isinstance(spec["layers"], list):
+        return "spec layers must be a list"
+    return None
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -1089,6 +1135,46 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.json_response(500, {"error": "recolour failed: %s: %s"
                                         % (type(exc).__name__, exc)})
+            return
+        if len(parts) == 1 and parts[0] == "compose":
+            # Composition: the studio sends the whole layer stack inline (SVG
+            # strings and raster data-URIs) as {op, spec} and gets ONE merged SVG
+            # back, vectors intact -- no raster round-trip, so what the trace
+            # stage produced is still what gets printed. Layers are never read
+            # from disk: src is inline by contract.
+            spec = body.get("spec") if isinstance(body, dict) else None
+            problem = compose_problem(spec)
+            if problem:
+                self.json_response(422, {"error": problem,
+                                         "kind": "invalid_spec"})
+                return
+            compose_svg = _compose_module()
+            findings: dict = {}
+            try:
+                svg = compose_svg.compose(spec, report=findings).encode("utf-8")
+            except compose_svg.SpecError as exc:
+                # A spec the merge refuses to guess at. 422 with the kind the
+                # studio switches on, never a silent partial merge.
+                self.json_response(422, {"error": str(exc),
+                                         "kind": "invalid_spec"})
+                return
+            except Exception as exc:
+                self.json_response(500, {"error": "compose failed: %s: %s"
+                                        % (type(exc).__name__, exc)})
+                return
+            if findings.get("off_palette") or findings.get("ignored"):
+                # Findings, not failures: a colour off the composite's own
+                # palette, or a hue the merge could not apply, is logged so it
+                # is visible in the runner's log rather than disappearing into
+                # the returned file.
+                print("compose: %s" % json.dumps(
+                    {"off_palette": findings.get("off_palette"),
+                     "ignored": findings.get("ignored")}), flush=True)
+            self.send_response(200)
+            self.send_header("Content-Type", "image/svg+xml")
+            self.send_header("Content-Length", str(len(svg)))
+            self.end_headers()
+            self.wfile.write(svg)
             return
         self.json_response(404, {"error": "unknown route"})
 
