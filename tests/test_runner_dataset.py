@@ -30,6 +30,7 @@ import os
 import shutil
 import sys
 import threading
+import time
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -647,7 +648,18 @@ def test_the_dataset_archive_streams_and_unlinks_its_temporary_file(
     assert headers["content-disposition"] == \
         'attachment; filename="%s.dataset.7z"' % STEM
     assert body == b"7z-ish bytes"
-    assert not (jobs / ("%s.dataset.7z" % STEM)).exists(), \
+    # The unlink happens SERVER-side, in a finally after serve_file returns --
+    # and the client can have read the whole body and returned before that
+    # thread reaches the unlink, so the instant after the read is a race. This
+    # is not theoretical: it passed 6/6 in isolation on both the host and the
+    # image's interpreter, then failed exactly here under the load of the full
+    # suite in the image build (the Dockerfile runs pytest, so a flaky assertion
+    # makes the image unbuildable). Poll with a bounded deadline instead.
+    temp = jobs / ("%s.dataset.7z" % STEM)
+    deadline = time.monotonic() + 5
+    while temp.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not temp.exists(), \
         "the temporary archive is unlinked in a finally"
 
 
