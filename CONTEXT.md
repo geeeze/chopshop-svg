@@ -99,8 +99,8 @@ is which candidate to print.
   test count — `README.md` and `docs/OVERVIEW.md` point here instead, because the
   number moves with every change and three stale copies were three chances to
   mislead. Verified on a full checkout with the repo venv:
-  `.venv/bin/python -m pytest tests -q` collects **688** and passes
-  **643 passed, 45 skipped**. Re-run it and update this line when you touch the
+  `.venv/bin/python -m pytest tests -q` collects **700** and passes
+  **655 passed, 45 skipped**. Re-run it and update this line when you touch the
   suite. (`AGENTS.md` still carries an older number — 400 — and it is owned by the
   parent agent, not by this working-state file; an agent session CANNOT correct it,
   because the write guard refuses edits to a protected agent-instruction file and
