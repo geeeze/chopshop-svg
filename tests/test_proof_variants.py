@@ -18,7 +18,13 @@ output usable as a training set:
    untouched.  Both directions are asserted, because a transform that quietly
    does both would make every downstream metric meaningless.
 4. **It never picks a winner and never edits a source.**  Every requested
-   transform is emitted and the inputs are read only.
+   transform that applies is emitted and the inputs are read only.
+5. **A transform that cannot apply to THIS artwork costs only itself.**  It is
+   SKIPPED, NAMED in the notes, and emits no file -- while `count` and
+   `transforms` still describe exactly what is on disk.  A real fault (a broken
+   input, a malformed document) still discards the whole set atomically.  The
+   fixtures for this are single-colour on purpose: no multi-colour fixture can
+   reach the path that made single-ink line art produce no dataset at all.
 
 Fixtures are synthetic and built in ``tmp_path`` -- nothing here touches the
 real ``00_source/`` batch or the repo's output directories.
@@ -967,6 +973,239 @@ def test_the_duplicate_note_reaches_the_dataset_notes(tmp_path):
                                    transforms=["hue-90"])
     assert any(text.startswith("hue-90: ") and "visually the proof" in text
                for text in description["notes"]), description["notes"]
+
+
+# --------------------------------------------------------------------------
+# A transform that cannot apply to THIS artwork: skip it, name it, keep the rest
+# --------------------------------------------------------------------------
+#
+# THE GAP THAT LET THIS SHIP: no fixture in this file was single-colour, so no
+# test ever reached `palette-cycle`'s refusal on real single-ink line art -- an
+# ordinary output of this pipeline's own trace stage.  Measured on a real proof
+# through the deployed runner: that ONE refusal discarded the other ELEVEN
+# transforms and `manifest["dataset"]` came back None.  The fixtures below are
+# single-colour ON PURPOSE.
+#
+# Two invariants must survive the fix, and both are asserted here:
+#   * no silent duplicate -- a skipped transform emits NO file at all, so it
+#     cannot smuggle a copy of the proof into the set;
+#   * all-or-nothing on a REAL fault -- a truncated proof or a transform that
+#     raises a plain TransformError still discards every file, staging included.
+
+SINGLE_INK = (0, 0, 0)
+
+# One declared colour.  `circle` and `path` give the vector half real geometry,
+# so a colour transform that rewrote something it should not would show up.
+SINGLE_INK_SVG = """<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="40mm" height="40mm"
+     viewBox="0 0 40 40">
+  <path id="ink" d="M2,2 L12,6 L4,18 Z" fill="#000000"/>
+  <circle id="dot" cx="32" cy="32" r="5" fill="#000000"/>
+</svg>
+"""
+
+
+def single_ink_proof(path, size=(40, 40)):
+    """A one-colour raster: any second pixel value would be a second ink."""
+    path.write_bytes(_png_bytes(Image.new("RGB", size, SINGLE_INK)))
+    return path
+
+
+@pytest.fixture
+def single_ink(tmp_path):
+    """(proof, svg) for one single-ink artwork, with NO manifest beside it.
+
+    No manifest is the case that failed on the real proof: with no declared
+    palette the cycle walks the ARTWORK'S OWN colours, and one colour is not a
+    permutation.
+    """
+    proof = single_ink_proof(tmp_path / "candidate_05.proof.png")
+    svg = write_svg(tmp_path / "candidate_05.svg", SINGLE_INK_SVG)
+    return proof, svg
+
+
+def test_a_single_colour_artwork_gets_every_other_transform(single_ink, tmp_path):
+    """11 of 12, with the twelfth NAMED -- not twelve claimed and eleven held."""
+    proof, svg = single_ink
+    out = tmp_path / "candidate_05.dataset"
+    emitted = [name for name in pv.TRANSFORMS if name != "palette-cycle"]
+    assert len(pv.TRANSFORMS) == 12, \
+        "11-of-12 is only meaningful against a 12-name vocabulary"
+
+    description = pv.build_dataset(proof, svg, out, transforms=True)
+
+    # The count describes the FILES, and the files are on disk.
+    assert description["count"] == 11
+    assert description["transforms"] == emitted
+    assert sorted(p.name for p in (out / "raster").iterdir()) \
+        == sorted("%s.png" % name for name in emitted)
+    assert sorted(p.name for p in (out / "vector").iterdir()) \
+        == sorted("%s.svg" % name for name in emitted)
+    assert sorted(entry["transform"] for entry in description["files"]) \
+        == sorted(emitted)
+    assert not (out / "raster" / "palette-cycle.png").exists()
+    assert not (out / "vector" / "palette-cycle.svg").exists()
+
+    # The skipped transform is named, in the notes and in the report.
+    notes = [text for text in description["notes"]
+             if text.startswith("palette-cycle:")]
+    assert notes and "not applicable" in notes[0], description["notes"]
+    assert "nothing to cycle" in notes[0], notes
+    assert not any(text.startswith(name + ":") and "not applicable" in text
+                   for text in description["notes"] for name in emitted), \
+        "only the transform that cannot apply may be skipped"
+    assert [entry["transform"] for entry in description["skipped"]] \
+        == ["palette-cycle"]
+
+    # And the two written reports agree with the returned description.
+    payload = json.loads((out / "dataset.json").read_text(encoding="utf-8"))
+    assert payload["count"] == 11
+    assert payload["transforms"] == emitted
+    assert payload["skipped"] == description["skipped"]
+    assert payload["notes"] == description["notes"]
+    markdown = (out / "dataset.md").read_text(encoding="utf-8")
+    assert "# Proof variants -- 11 similar copies" in markdown
+    assert "not applicable" in markdown and "palette-cycle" in markdown
+
+
+def test_the_refusal_on_single_ink_art_is_typed_not_applicable(single_ink):
+    """The type is the fix's contract: TransformNotApplicable IS a TransformError.
+
+    Both halves refuse, a caller that only knows TransformError keeps working
+    (the CLI's exit code, the runner's note), and the reason travels with it.
+    """
+    proof, svg = single_ink
+    for call in (lambda: pv.transform_raster(proof.read_bytes(), "palette-cycle"),
+                 lambda: pv.transform_svg(svg.read_bytes(), "palette-cycle")):
+        with pytest.raises(pv.TransformNotApplicable) as caught:
+            call()
+        assert isinstance(caught.value, pv.TransformError)
+        assert "nothing to cycle" in str(caught.value)
+        assert caught.value.reason, "the dataset note needs a reason to quote"
+
+
+def test_a_real_fault_is_not_reclassified_as_inapplicable():
+    """The boundary itself: a broken input stays a plain TransformError.
+
+    A document with no usable frame is a fault -- every tracer candidate carries
+    one -- and so is an unreadable image. Reclassifying those would turn a
+    broken build into a quietly smaller dataset.
+    """
+    with pytest.raises(pv.TransformError) as caught:
+        pv.transform_svg(b'<svg xmlns="http://www.w3.org/2000/svg"/>', "flip-h")
+    assert not isinstance(caught.value, pv.TransformNotApplicable)
+    assert "frame" in str(caught.value)
+
+
+def test_a_dataset_of_only_inapplicable_transforms_leaves_no_dataset(
+        single_ink, tmp_path):
+    """Every requested transform skipped: there is nothing to write, so write it.
+
+    An empty `.dataset/` is worse than none -- the archive route lists any such
+    directory as a real dataset and would stream an empty package.
+    """
+    proof, svg = single_ink
+    out = tmp_path / "candidate_05.dataset"
+    with pytest.raises(pv.TransformNotApplicable) as caught:
+        pv.build_dataset(proof, svg, out, transforms=["palette-cycle"])
+    assert isinstance(caught.value, pv.TransformError)
+    assert "palette-cycle" in str(caught.value)
+    assert "nothing to cycle" in str(caught.value)
+    assert not out.exists(), "no dataset directory may survive"
+    assert not [p for p in tmp_path.iterdir() if "partial" in p.name]
+    assert not [p for p in tmp_path.iterdir() if ".dataset" in p.name]
+
+
+def test_cli_exits_five_when_no_requested_transform_applies(single_ink, tmp_path,
+                                                           capsys):
+    proof, svg = single_ink
+    code = pv.main(["--proof", str(proof), "--svg", str(svg),
+                    "--out", str(tmp_path / "d"),
+                    "--transforms", "palette-cycle"])
+    assert code == 5, "you asked for a variant and there is none"
+    err = capsys.readouterr().err
+    assert "no variant can be derived" in err and "palette-cycle" in err
+    assert not (tmp_path / "d").exists()
+
+
+def test_a_real_fault_still_discards_the_whole_set_atomically(single_ink, tmp_path,
+                                                              monkeypatch):
+    """All-or-nothing on a FAULT is untouched by the skip outcome.
+
+    The fault is forced on the THIRD transform, so two pairs are already written
+    into the staging tree when it fires -- and `palette-cycle`, which this
+    artwork skips, is still in the plan behind it. A fault must neither be
+    swallowed by the skip logic nor leave a half-built tree.
+    """
+    proof, svg = single_ink
+    out = tmp_path / "candidate_05.dataset"
+    real = pv.transform_raster
+    calls = []
+
+    def faulty(image_bytes, transform, **kwargs):
+        calls.append(transform)
+        if len(calls) == 3:
+            raise pv.TransformError("forced fault on %s" % transform)
+        return real(image_bytes, transform, **kwargs)
+
+    monkeypatch.setattr(pv, "transform_raster", faulty)
+    with pytest.raises(pv.TransformError) as caught:
+        pv.build_dataset(proof, svg, out)
+    assert calls[:3] == list(pv.TRANSFORMS[:3]), calls
+    assert "forced fault" in str(caught.value)
+    assert not isinstance(caught.value, pv.TransformNotApplicable)
+    assert not out.exists()
+    assert not [p for p in tmp_path.iterdir() if "partial" in p.name]
+
+
+def test_a_truncated_proof_is_a_fault_not_an_inapplicability(single_ink, tmp_path):
+    proof, svg = single_ink
+    truncated = tmp_path / "truncated.proof.png"
+    truncated.write_bytes(proof.read_bytes()[: len(proof.read_bytes()) // 3])
+    out = tmp_path / "truncated.dataset"
+    with pytest.raises(Exception) as caught:            # noqa: B017 - any type
+        pv.build_dataset(truncated, svg, out)
+    assert not isinstance(caught.value, pv.TransformNotApplicable), \
+        "an unreadable image is a broken input, not a property of the art"
+    assert not out.exists()
+
+
+def test_a_multi_colour_artwork_skips_nothing(package, tmp_path):
+    """The other side of the same decision: the ordinary case is unchanged."""
+    proof, svg, manifest = package
+    out = tmp_path / "candidate_02.dataset"
+    description = pv.build_dataset(proof, svg, out,
+                                   transforms=["palette-cycle", "flip-h",
+                                               "invert"],
+                                   manifest=manifest)
+    assert description["count"] == 3
+    assert description["transforms"] == ["flip-h", "invert", "palette-cycle"]
+    assert description["skipped"] == []
+    assert not any("not applicable" in text for text in description["notes"])
+    assert (out / "raster" / "palette-cycle.png").is_file()
+    assert (out / "vector" / "palette-cycle.svg").is_file()
+
+
+def test_a_requantised_palette_cycle_is_emitted_not_skipped(tmp_path):
+    """A continuous-tone proof still gets all twelve.
+
+    `palette-cycle` on art whose colours miss the palette is a REQUANTISATION,
+    not an inapplicability: the variant moves the image, so it is emitted with
+    the note that says so. Only a cycle with nothing to move -- or one that
+    could only move the image by duplicating it -- is skipped.
+    """
+    proof = make_gradient_proof(tmp_path / "ramp.proof.png")
+    svg = make_miss_svg(tmp_path / "ramp.svg")
+    out = tmp_path / "ramp.dataset"
+    description = pv.build_dataset(
+        proof, svg, out,
+        manifest={"substrate": {"screens": list(GRADIENT_PALETTE)},
+                  "stats": {"dpi": 300}})
+    assert description["count"] == len(pv.TRANSFORMS)
+    assert description["skipped"] == []
+    entry = [item for item in description["files"]
+             if item["transform"] == "palette-cycle"][0]
+    assert any("REQUANTISATION" in text for text in entry["notes"]), entry["notes"]
 
 
 # --------------------------------------------------------------------------

@@ -48,19 +48,40 @@ is which candidate to print.
     figures are per-artifact — quote the one you measured. It now MEASURES the exact pass and, below `MIN_VARIANT_CHANGE` (0.5%
     of pixel mass / of paint values), redoes the cycle through PIL's
     nearest-colour search over the palette and records a `REQUANTISATION` note in
-    `dataset.json`/`dataset.md`; if even that cannot move the image it REFUSES
-    the transform (a `TransformError` the runner records as a manifest note).
+    `dataset.json`/`dataset.md`; if even that cannot move the image, the
+    transform simply cannot apply to THAT artwork and is skipped (see the
+    outcomes bullet below) — never emitted as a copy, and never a reason to
+    discard the rest of the set.
     The general invariant: **no variant may be a silent duplicate.** Every
     transform reports the share it moved, and one that changed less than the
     floor is named in the notes (a flip of symmetric art, a hue shift of an
     achromatic proof). A second cause of that no-op was case: declared colours
     come back lowercase while a manifest palette is uppercase, so the mapping
     missed every entry — both sides are now normalised (`norm_hex`).
-  - **`build_dataset` is all-or-nothing.** It builds in a staging dir beside the
-    target and swaps it in (`os.replace`) only after every requested transform
-    is written, so a refused transform leaves no partial `.dataset/` (which the
-    archive route would otherwise list as a real dataset). It refuses to replace
-    a non-empty directory that carries no `dataset.json` — that one is not ours.
+  - **`build_dataset` has THREE outcomes, and they are not the same failure.**
+    (1) A transform that applies is written. (2) A transform that cannot apply to
+    THIS artwork — `palette-cycle` on single-ink line art, an ordinary output of
+    the trace stage — raises `TransformNotApplicable` (a `TransformError`
+    subclass, so the CLI's exit code and the runner's manifest note are
+    unchanged), is SKIPPED, and is NAMED in the notes. That costs one variant and
+    nothing else, where it used to cost all twelve: measured on a real job
+    through the deployed runner, the one refusal discarded the other eleven
+    transforms and `manifest["dataset"]` came back `None`, because the artwork
+    was single-ink and the default opt-in asked for `palette-cycle` too. (3) A
+    real fault — an unreadable image, a document with no frame, a name outside
+    the vocabulary — still aborts the whole build atomically: the tree is built
+    in a staging dir beside the target and swapped in (`os.replace`) only after
+    every requested transform is written, so a fault leaves no partial
+    `.dataset/` (which the archive route would otherwise list as a real dataset).
+    It refuses to replace a non-empty directory that carries no `dataset.json` —
+    that one is not ours.
+  - **The count is the FILES, never the request.** `count` / `transforms`
+    describe what was actually emitted (plus a structured `skipped` list), and a
+    skipped transform is named in `notes`, which flow into `dataset.json`,
+    `dataset.md` and the runner's log. 11 of 12 with a note is the good outcome;
+    12 claimed with 11 held is the failure. If EVERY requested transform is
+    skipped, no `.dataset/` is left behind at all — an empty one would be listed
+    by the archive route as a real dataset.
   - A `transform` attribute on the outermost `<svg>` is **not** honoured by SVG
     1.1 renderers, so a spatial variant carries its matrix on one wrapping
     `<g>` and the root's viewBox/width/height are rewritten only where the axes

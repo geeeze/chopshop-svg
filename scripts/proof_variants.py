@@ -18,9 +18,11 @@ pipeline calls into it.
 
 Two laws carry over from the rest of the repo:
 
-* **It never picks a winner.**  Every requested transform is emitted; nothing is
-  ranked, filtered or recommended.  The report lists variants in the vocabulary's
-  own order, which is a reading order, not a quality judgement (same law as
+* **It never picks a winner.**  Every requested transform that this artwork can
+  take is emitted, and one it cannot take at all is skipped and NAMED rather
+  than quietly dropped or chosen against; nothing is ranked, filtered or
+  recommended.  The report lists variants in the vocabulary's own order, which
+  is a reading order, not a quality judgement (same law as
   `palette_variants.py` and `tune_sweep.py`).
 * **Nothing is synthesised.**  A spatial transform is a matrix/attribute rewrite
   of the root's frame; a colour transform is a `fill` / `stroke` / `stop-color`
@@ -57,6 +59,13 @@ generally no colour transform may emit a duplicate silently: every transform
 reports what it moved when the caller passes a ``notes`` list, and says plainly
 when its output is visually its input.
 
+A refusal is not the same failure as a fault, and this module keeps them apart
+with :class:`TransformNotApplicable`: "this transform cannot apply to THIS
+artwork" is a property of the art (single-ink line art has nothing to permute),
+while a broken input or a name outside the vocabulary is a fault.  At the
+dataset level the first costs one variant and is named in the notes; the second
+still discards the whole set, atomically.
+
 Usage
 -----
 ::
@@ -66,8 +75,10 @@ Usage
     python3 scripts/proof_variants.py --proof p.png --svg c.svg --out D \\
         --transforms flip-h,invert --sheet
 
-Exit codes: 0 = every requested variant written, 2 = bad usage, 5 = a transform
-failed (the message names the transform).
+Exit codes: 0 = every variant that APPLIES to this artwork was written (a
+transform that cannot apply to it is skipped and named in the notes), 2 = bad
+usage, 5 = a transform failed, or no requested transform applies to this artwork
+at all (the message names the transform).
 """
 
 from __future__ import annotations
@@ -122,6 +133,33 @@ MAX_DISTINCT_COLOURS = 1 << 20
 
 class TransformError(RuntimeError):
     """A transform could not be applied to this input (the CLI exits 5)."""
+
+
+class TransformNotApplicable(TransformError):
+    """A transform cannot apply to THIS artwork -- a property of the art.
+
+    A cycle with nothing to permute, or a cycle that cannot move this image
+    without emitting a duplicate of it, is not a fault: it is what this artwork
+    is.  The distinction is load-bearing at the dataset level (see
+    :func:`build_dataset`).  A FAULT must discard the whole set; an inapplicable
+    transform must cost that one variant and nothing else.  Collapsing the two
+    is what made single-ink line art -- an ordinary output of this pipeline's
+    own trace stage -- produce no training set at all: `palette-cycle` refusing
+    discarded the other ELEVEN transforms and left ``manifest["dataset"]`` None.
+
+    It IS a :class:`TransformError`, deliberately: every existing caller that
+    catches one (the CLI's exit code, the runner's note) keeps working
+    unchanged, and only a caller that wants the three outcomes apart catches
+    this one FIRST.
+    """
+
+    def __init__(self, message, reason=None):
+        super().__init__(message)
+        # One plain sentence for the dataset notes: WHY this artwork cannot
+        # take the transform, written without repeating the transform's name
+        # (the note adds that once -- "palette-cycle: ... palette-cycle ..."
+        # reads like a stutter).
+        self.reason = reason or message
 
 
 # --------------------------------------------------------------------------
@@ -512,10 +550,16 @@ def cycle_raster(rgb, palette, notes=None, colours=None):
     """
     wanted, source = cycle_colours(palette, colours=colours, notes=notes)
     if len(set(wanted)) < 2:
-        raise TransformError(
+        # NOT APPLICABLE, not a fault: a cycle needs two colours and this
+        # artwork (or the palette declared for it) has one. Nothing is asserted
+        # about the file being wrong -- it is simply single-ink art.
+        raise TransformNotApplicable(
             "palette-cycle has nothing to cycle: %s gives %s -- it needs two "
             "different colours to make a permutation"
-            % (source, ", ".join(wanted) or "none"))
+            % (source, ", ".join(wanted) or "none"),
+            reason="it has nothing to cycle: %s gives %s, and a cycle needs two "
+                   "different colours to make a permutation"
+                   % (source, ", ".join(wanted) or "none"))
     mapping = cycle_mapping(wanted)
     out = remap_exact(rgb, mapping)
     share = changed_fraction(rgb, out)
@@ -527,12 +571,19 @@ def cycle_raster(rgb, palette, notes=None, colours=None):
     requantised = remap_exact(requantise(rgb, wanted), mapping)
     share2 = changed_fraction(rgb, requantised)
     if share2 < MIN_VARIANT_CHANGE:
-        raise TransformError(
+        # Also NOT APPLICABLE: the transform CAN be applied, it simply cannot
+        # move this artwork -- the alternative to refusing is shipping a
+        # duplicate, so the honest outcome is to skip it and say why.
+        raise TransformNotApplicable(
             "palette-cycle cannot change this raster: an exact cycle of %s "
             "moved %.3f%% of the pixel mass and a nearest-colour "
             "requantisation onto it moved %.3f%% -- emitting it would put a "
             "duplicate of the proof in the dataset"
-            % (source, share * 100.0, share2 * 100.0))
+            % (source, share * 100.0, share2 * 100.0),
+            reason="it cannot move this raster without duplicating it: an exact "
+                   "cycle of %s moved %.3f%% of the pixel mass and a "
+                   "nearest-colour requantisation onto it moved %.3f%%"
+                   % (source, share * 100.0, share2 * 100.0))
     note(notes, "palette-cycle could not permute this proof: %s does not appear as "
                 "exact pixel values here (an exact cycle "
                 "moved only %.3f%% of the pixel mass), so the cycle was applied "
@@ -798,10 +849,15 @@ def cycle_vector(svg_bytes, colour_counts, palette, notes=None):
     colours = sorted(colour_counts)
     wanted, source = cycle_colours(palette, colours=colours, notes=notes)
     if len(set(wanted)) < 2:
-        raise TransformError(
+        # NOT APPLICABLE, not a fault: the candidate declares one colour (or
+        # the palette declared for it holds one), and a cycle needs two.
+        raise TransformNotApplicable(
             "palette-cycle has nothing to cycle: %s gives %s -- it needs two "
             "different colours to make a permutation"
-            % (source, ", ".join(wanted) or "none"))
+            % (source, ", ".join(wanted) or "none"),
+            reason="it has nothing to cycle: %s gives %s, and a cycle needs two "
+                   "different colours to make a permutation"
+                   % (source, ", ".join(wanted) or "none"))
 
     total = sum(colour_counts.values()) or 1
     # The declared colours come back in canonical lowercase while a palette from
@@ -838,12 +894,18 @@ def cycle_vector(svg_bytes, colour_counts, palette, notes=None):
     changes, _where = pv.apply_mapping(root, styles, mapping)
     nearest_changed = sum(changes.values())
     if nearest_changed / float(total) < MIN_VARIANT_CHANGE:
-        raise TransformError(
+        # Also NOT APPLICABLE: the cycle applies, but every candidate spelling
+        # of it leaves this SVG as it was -- skipping it is the honest outcome.
+        raise TransformNotApplicable(
             "palette-cycle cannot change this SVG: an exact cycle of %s "
             "rewrote %d of %d paint values and a nearest-colour remap onto it "
             "rewrote %d -- emitting it would put a copy of the candidate in "
             "the dataset"
-            % (source, exact_changed, total, nearest_changed))
+            % (source, exact_changed, total, nearest_changed),
+            reason="it cannot change this SVG without copying it: an exact "
+                   "cycle of %s rewrote %d of %d paint values and a "
+                   "nearest-colour remap onto it rewrote %d"
+                   % (source, exact_changed, total, nearest_changed))
     note(notes, "palette-cycle could not permute this candidate: %s is not what this "
                 "SVG declares (an exact cycle "
                 "rewrote only %d of %d paint values), so every declared colour "
@@ -1072,12 +1134,20 @@ def build_dataset(proof_png, candidate_svg, out_dir, *, transforms=None,
     disagree.  Both halves of every transform are written; the proof, the print
     PDF, the manifest and the selected SVG are read only, never touched.
 
-    ALL OR NOTHING: the tree is built in a staging directory beside the target
-    and swapped into place only once every requested transform has been written.
-    A refused transform (an impossible `palette-cycle`, a document with no
-    frame) therefore leaves no half-built set behind -- a partial `.dataset/`
-    would be read by the archive route as a real dataset and would ship an empty
-    package.
+    ALL OR NOTHING ON A FAULT: the tree is built in a staging directory beside
+    the target and swapped into place only once every requested transform has
+    been written.  A refused transform (a document with no frame, an unreadable
+    image, a name outside the vocabulary) therefore leaves no half-built set
+    behind -- a partial `.dataset/` would be read by the archive route as a real
+    dataset and would ship an empty package.
+
+    ONE INAPPLICABLE TRANSFORM COSTS ONLY ITSELF: when the reason is a property
+    of THIS artwork (see :class:`TransformNotApplicable` -- `palette-cycle` on
+    single-ink line art, which is ordinary output of this pipeline's own trace
+    stage), that transform is SKIPPED and named in the notes while every other
+    one is still written, and `count` / `transforms` describe exactly the files
+    that were emitted.  If EVERY requested transform is inapplicable there is no
+    dataset to write and none is left behind.
     """
     proof_path = Path(proof_png)
     svg_path = Path(candidate_svg)
@@ -1124,6 +1194,16 @@ def build_dataset(proof_png, candidate_svg, out_dir, *, transforms=None,
     return description
 
 
+def not_applicable_note(name: str, reason: str) -> str:
+    """The dataset note for a transform THIS artwork cannot take.
+
+    One sentence, in the same shape as the notes `_build_into` lifts from a
+    transform's own report ("<transform>: <what happened>"), so the two read
+    alike in dataset.json, dataset.md and the runner's log.
+    """
+    return "%s: not applicable to this artwork -- %s" % (name, reason)
+
+
 def _build_into(out, dir_name, plan, proof_bytes, svg_bytes, proof_path,
                 svg_path, stem, palette, manifest_payload, manifest_path,
                 manifest_source, notes) -> dict:
@@ -1145,6 +1225,7 @@ def _build_into(out, dir_name, plan, proof_bytes, svg_bytes, proof_path,
 
     proof_sha = sha256_bytes(proof_bytes)
     files = []
+    skipped = []
     for name in plan:
         # A per-transform notes list: what the transform measured, and a plain
         # statement whenever it produced something that duplicates its input
@@ -1155,6 +1236,17 @@ def _build_into(out, dir_name, plan, proof_bytes, svg_bytes, proof_path,
                                       notes=transform_notes)
             vector = transform_svg(svg_bytes, name, palette=palette,
                                    notes=transform_notes)
+        except TransformNotApplicable as exc:
+            # THE THIRD OUTCOME, beside "written" and "a fault".  This transform
+            # cannot apply to THIS artwork (single-ink line art has nothing for
+            # `palette-cycle` to permute), which is a property of the art, not a
+            # defect: the transform is SKIPPED, NAMED in the notes, and no file
+            # is written for it -- so the set carries no duplicate and no empty
+            # pair.  Every other transform is still written, and a real fault
+            # still aborts the whole build (the excepts below).
+            skipped.append({"transform": name, "reason": exc.reason})
+            notes.append(not_applicable_note(name, exc.reason))
+            continue
         except TransformError:
             raise
         except Exception as exc:                    # noqa: BLE001 - name it
@@ -1184,6 +1276,19 @@ def _build_into(out, dir_name, plan, proof_bytes, svg_bytes, proof_path,
                              % (proof_size[0], proof_size[1], size[0], size[1]))
         files.append(entry)
 
+    if plan and not files:
+        # EVERY requested transform is inapplicable to this artwork, so there is
+        # no dataset to describe.  Emitting an empty one (count 0, no pairs, no
+        # manifest) would be worse than emitting none: the archive route lists
+        # any `<stem>.dataset/` as a real dataset and would ship an empty
+        # package.  Raised BEFORE the staging tree is swapped into place, so no
+        # directory survives and the caller reports the reason instead.
+        raise TransformNotApplicable(
+            "no dataset was derived: every requested transform is not applicable "
+            "to this artwork (%s)"
+            % "; ".join("%s: %s" % (entry["transform"], entry["reason"])
+                        for entry in skipped))
+
     # Lift the per-transform notes into the dataset's own notes, named by the
     # transform: that list is what a consumer reads, and a note that only lives
     # inside a file entry is a note nobody sees.  A note that already opens with
@@ -1200,8 +1305,13 @@ def _build_into(out, dir_name, plan, proof_bytes, svg_bytes, proof_path,
         "manifest": "%s%s.json" % (stem, DATASET_SUFFIX),
         "sheet": "%s%s-contact-sheet.png" % (stem, DATASET_SUFFIX),
         "package": "%s%s.7z" % (stem, DATASET_SUFFIX),
-        "count": len(plan),
-        "transforms": list(plan),
+        # WHAT WAS ACTUALLY EMITTED, not what was asked for.  A set that claims
+        # twelve variants while holding eleven is the one failure this stage
+        # must not have: a consumer counts what is here and trusts the count.
+        # `skipped` is the same fact for a reader that wants it structured
+        # rather than prose.
+        "count": len(files),
+        "transforms": [entry["transform"] for entry in files],
         "tool": "proof_variants.py",
         "vocabulary": list(TRANSFORMS),
         "source": {
@@ -1215,6 +1325,7 @@ def _build_into(out, dir_name, plan, proof_bytes, svg_bytes, proof_path,
         "provenance": provenance_of(manifest_payload, manifest_path, proof_path,
                                     svg_path, palette, manifest_source),
         "files": files,
+        "skipped": skipped,
         "notes": notes,
     }
 
@@ -1230,11 +1341,23 @@ def format_markdown(description: dict) -> str:
     proof = source.get("proof") or {}
     vector = source.get("vector") or {}
     provenance = description.get("provenance") or {}
+    skipped = description.get("skipped") or []
     out = []
     out.append("# Proof variants -- %d similar copies" % description["count"])
     out.append("")
-    out.append("Every requested transform, both halves. This is a set, not a "
-               "ranking: nothing here says which copy is better.")
+    if skipped:
+        # The count above is what was EMITTED, so this sentence has to match it:
+        # a set that claims twelve and holds eleven is a lie however well it is
+        # annotated elsewhere in the file.
+        out.append("Every requested transform that applies to this artwork, both "
+                   "halves -- %d of them %s not applicable to it and %s named "
+                   "below. This is a set, not a ranking: nothing here says "
+                   "which copy is better."
+                   % (len(skipped), "is" if len(skipped) == 1 else "are",
+                      "is" if len(skipped) == 1 else "are"))
+    else:
+        out.append("Every requested transform, both halves. This is a set, not "
+                   "a ranking: nothing here says which copy is better.")
     out.append("")
     out.append("- proof: `%s` (%sx%s, sha256 `%s`)"
                % (proof.get("file"), proof.get("width"), proof.get("height"),
@@ -1413,6 +1536,12 @@ def main(argv=None) -> int:
         description = build_dataset(proof_path, svg_path, out_dir,
                                     transforms=plan, manifest=args.manifest,
                                     stem=stem)
+    except TransformNotApplicable as exc:
+        # Every requested transform is inapplicable to this artwork: nothing was
+        # written and nothing was left behind. Exit 5 says "you asked for a
+        # variant and there is none", which is the honest reading here too.
+        print("no variant can be derived: %s" % exc, file=sys.stderr)
+        return 5
     except TransformError as exc:
         print("transform failed: %s" % exc, file=sys.stderr)
         return 5
@@ -1431,6 +1560,13 @@ def main(argv=None) -> int:
         for text in entry.get("notes") or []:
             print("      %s" % text)
 
+    # A transform that cannot apply to THIS artwork is not a missing file to
+    # hide: it is named here, with its reason, so a set of 11 out of 12 reads as
+    # the honest outcome it is.
+    for entry in description.get("skipped") or []:
+        print("  %-14s %-7s not applicable to this artwork: %s"
+              % (entry["transform"], "skipped", entry["reason"]))
+
     if args.sheet:
         banner(3, "contact sheet")
         try:
@@ -1447,8 +1583,13 @@ def main(argv=None) -> int:
     print("wrote %s" % (out_dir / "dataset.json"))
     print("wrote %s" % (out_dir / "dataset.md"))
     print("")
-    print("%d variant(s) of %s -- every one emitted; which copy is useful is "
-          "your call, not this tool's." % (description["count"], stem))
+    summary = "%d variant(s) of %s" % (description["count"], stem)
+    if description.get("skipped"):
+        summary += " (%d requested transform(s) not applicable to this artwork: %s)" \
+            % (len(description["skipped"]),
+               ", ".join(entry["transform"] for entry in description["skipped"]))
+    print("%s -- every one emitted; which copy is useful is your call, not this "
+          "tool's." % summary)
     return 0
 
 

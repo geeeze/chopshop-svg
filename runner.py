@@ -589,6 +589,14 @@ def build_proof_dataset(job: dict, validation: dict, manifest: dict,
     _append_log(validation, "dataset: %d variants (%s) -> %s"
                 % (description["count"], ", ".join(description["transforms"]),
                    description["dir"]))
+    # Honest reporting, the operator's half: the dataset block below says what
+    # WAS emitted, and a requested transform that cannot apply to this artwork is
+    # named here with its reason (the same note is in dataset.json/dataset.md).
+    # Its whole point is that 11 out of 12 must not read like a stage that lost
+    # one -- this is the only line in the runner that this required.
+    for entry in description.get("skipped") or []:
+        _append_log(validation, "dataset: %s not applicable to this artwork: %s"
+                    % (entry["transform"], entry["reason"]))
     return {
         "dir": description["dir"],
         "manifest": description["manifest"],

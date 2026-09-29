@@ -366,6 +366,59 @@ def test_a_palette_cycle_that_cannot_cycle_is_a_note_not_a_failed_proof(
     assert not [p for p in Path(job["dir"]).iterdir() if ".dataset" in p.name]
 
 
+def test_single_ink_art_still_gets_the_other_eleven_variants(workdir, monkeypatch):
+    """The measured defect through the runner: 11 of 12, not `None`.
+
+    A one-colour screen set is the operational form of the real failure (a
+    candidate whose whole colour set is ONE ink): `palette-cycle` cannot apply to
+    it, and that must cost that one variant instead of the whole dataset.  The
+    block reports what was EMITTED, and the skip is named in the log and in
+    dataset.json -- 11 of 12 with a note, never 12 claimed and 11 held.
+    """
+    project, jobs = workdir
+    job = make_job(jobs, variants=True)
+    validation = run_back(job, monkeypatch, project, screens=["#000000"])
+
+    assert validation["state"] == "done"
+    dataset = validation["manifest"]["dataset"]
+    assert dataset["count"] == len(pv.TRANSFORMS) - 1 == 11
+    assert dataset["transforms"] == [name for name in pv.TRANSFORMS
+                                     if name != "palette-cycle"]
+
+    out = Path(job["dir"]) / dataset["dir"]
+    assert sorted(p.name for p in (out / "raster").iterdir()) \
+        == sorted("%s.png" % name for name in dataset["transforms"])
+    assert sorted(p.name for p in (out / "vector").iterdir()) \
+        == sorted("%s.svg" % name for name in dataset["transforms"])
+    assert not (out / "raster" / "palette-cycle.png").exists()
+
+    payload = json.loads((out / "dataset.json").read_text(encoding="utf-8"))
+    assert any("palette-cycle: not applicable" in note
+               for note in payload["notes"]), payload["notes"]
+    assert any("palette-cycle not applicable" in line
+               for line in validation["log"]), validation["log"]
+
+
+def test_every_transform_inapplicable_means_no_dataset_key_at_all(
+        workdir, monkeypatch):
+    """Nothing could be derived is a NOTE on a done validation, and no key.
+
+    An empty `.dataset/` would be listed by the archive route as a real dataset;
+    the stage leaves nothing behind and the operator is told why.
+    """
+    project, jobs = workdir
+    job = make_job(jobs, variants={"enabled": True,
+                                   "transforms": ["palette-cycle"]})
+    validation = run_back(job, monkeypatch, project, screens=["#000000"])
+
+    assert validation["state"] == "done"
+    manifest = validation["manifest"]
+    assert "dataset" not in manifest
+    assert any("not applicable" in note for note in manifest["notes"]), manifest
+    assert manifest["proof"] == "%s.proof.png" % STEM
+    assert not [p for p in Path(job["dir"]).iterdir() if ".dataset" in p.name]
+
+
 # --------------------------------------------------------------------------
 # dataset_stems / dataset_file
 # --------------------------------------------------------------------------
