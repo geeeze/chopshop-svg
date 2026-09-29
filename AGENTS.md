@@ -239,3 +239,8 @@ The five canonical triage roles, each label string equal to its name. See `docs/
 ### Domain docs
 
 Single-context: one `CONTEXT.md` at the repo root. See `docs/agents/domain.md`.
+
+### Standards
+
+The shared conventions, and the rules for this tracker. Read
+`docs/agents/standards.md` before filing an issue or landing a change.
