@@ -150,6 +150,91 @@ def slug(name: str) -> str:
     return value or "artwork"
 
 
+# --------------------------------------------- published artifact names ------
+#
+# A job's NAME reaches into the filenames of what it produces, so a downloaded
+# 7z -- or a scrapbook favourite -- says which run an artifact came from:
+#
+#     <name>-candidate-01.svg      <name>-proof-01.png / <name>-proof-01.pdf
+#
+# The pipeline's OWN names are untouched: `trace_sweep.py` still writes
+# candidate_NN.svg into 02_traced/<stem>/, and `validate_svg.py` still writes
+# <candidate stem>.proof.png into 05_final/. That half is frozen by this repo's
+# hard rules and its names are a contract other tools read, so this runner
+# renames at PUBLISH time -- when it copies an artifact into the job directory --
+# and rewrites the two things that carry a name back to the caller: the
+# comparison entry's "file" and the manifest's "proof"/"print_pdf".
+#
+# Both DIRECTIONS are needed, because the studio posts the PUBLISHED candidate
+# name back to POST /validations: `internal_candidate` maps it to the pipeline's
+# own spelling before the print check runs on it.
+#
+# Only a job FILED through POST /jobs carries a `name_slug`. A job dict built by
+# hand -- the reindex pass after a restart, a test's synthetic job -- has none,
+# and its artifacts keep the pipeline's own names. That is not a fallback: a
+# reindexed job directory already holds whatever names it was published under,
+# and inventing a new spelling for files already on disk would break every
+# stored reference to them.
+
+NAME_SLUG_KEY = "name_slug"
+CANDIDATE_NAME = re.compile(r"\Acandidate_(\d+)(\.[A-Za-z0-9]+)\Z")
+PUBLISHED_CANDIDATE = re.compile(r"(?:\A|-)(candidate-\d+\.[A-Za-z0-9]+)\Z")
+PUBLISHED_PROOF = re.compile(r"(?:\A|-)(proof-\d+\.(?:png|pdf|manifest\.json))\Z")
+
+
+def job_name_slug(job: dict) -> str:
+    """The slug stamped into this job's published filenames, or "" when the job
+    carries no name of its own (a hand-built or reindexed job dict)."""
+    return str(job.get(NAME_SLUG_KEY) or "")
+
+
+def published_candidate(job: dict, name: str) -> str:
+    """The name a candidate is PUBLISHED under inside this job's directory."""
+    slug_value = job_name_slug(job)
+    match = CANDIDATE_NAME.match(Path(name).name)
+    if not slug_value or not match:
+        return name
+    return "%s-candidate-%s%s" % (slug_value, match.group(1), match.group(2))
+
+
+def internal_candidate(name: str) -> str:
+    """The pipeline's own spelling of a candidate the caller named. Anything
+    already in that spelling -- a legacy job, a hand-written name -- comes back
+    unchanged, so the mapping is safe to apply to every caller's input."""
+    base = Path(name).name
+    match = PUBLISHED_CANDIDATE.search(base)
+    if not match:
+        return base
+    return match.group(1).replace("candidate-", "candidate_", 1)
+
+
+def published_proof_stem(job: dict, candidate: str) -> str:
+    """The stem a proof is published under: <name>-proof-01 for EITHER spelling
+    of the candidate it came from. Without a job name the pipeline's own stem is
+    kept, which is what a job directory published before the rename holds."""
+    slug_value = job_name_slug(job)
+    if not slug_value:
+        return Path(candidate).stem
+    match = re.search(r"candidate[_-](\d+)\Z", Path(candidate).stem)
+    return "%s-proof-%s" % (slug_value, match.group(1)) if match else "%s-proof" % slug_value
+
+
+def published_proof_files(job: dict, candidate: str) -> dict:
+    """The three names a proof is published under, as a dict keyed png/pdf/manifest.
+
+    The user-facing shape is <name>-proof-01.png / .pdf (and .manifest.json
+    beside them). Without a job name the pipeline's own spelling
+    (<candidate stem>.proof.png / .print.pdf) is kept verbatim, so this is the
+    identity function for every job that predates the rename.
+    """
+    stem = published_proof_stem(job, candidate)
+    if not job_name_slug(job):
+        return {"png": "%s.proof.png" % stem, "pdf": "%s.print.pdf" % stem,
+                "manifest": "%s.manifest.json" % stem}
+    return {"png": "%s.png" % stem, "pdf": "%s.pdf" % stem,
+            "manifest": "%s.manifest.json" % stem}
+
+
 def health_payload() -> dict:
     """The body of GET /health.
 
@@ -240,6 +325,29 @@ def artifact_path(root: Path, *, stem: str, name: str, job_dir: Path) -> Path | 
         prepped = root / "01_prepped" / f"{stem}{suffix}"
         if prepped.is_file():
             return prepped
+    # published-artifact-names: a published spelling can be asked for on a job
+    # directory that predates the rename (or one whose copies were pruned), so
+    # map it back to the pipeline's own name and resolve from the project tree.
+    # Both spellings therefore serve, which is what lets the studio label a row
+    # with a published name and still fetch a legacy job's bytes.
+    mapped = internal_candidate(name)
+    if mapped != name:
+        traced = root / "02_traced" / stem / mapped
+        if traced.is_file():
+            return traced
+    proof_like = PUBLISHED_PROOF.search(Path(name).name)
+    if proof_like:
+        published_tail = proof_like.group(1)
+        index = re.match(r"proof-(\d+)", published_tail).group(1)
+        if published_tail.endswith(".png"):
+            legacy = ".proof.png"
+        elif published_tail.endswith(".pdf"):
+            legacy = ".print.pdf"
+        else:
+            legacy = ".manifest.json"
+        built = root / "05_final" / f"candidate_{index}{legacy}"
+        if built.is_file():
+            return built
     return None
 
 
@@ -272,14 +380,27 @@ def _copy_front_outputs(job: dict, stem: str) -> list[dict]:
         raise RuntimeError(f"front pipeline produced no comparison report: {report}")
     data = json.loads(report.read_text(encoding="utf-8"))
     job_dir = Path(job["dir"])
-    shutil.copy2(report, job_dir / "comparison.json")
     candidates = []
+    renamed = False
     for entry in data.get("candidates", []):
         name = entry.get("file", "")
         source = PROJECT / "02_traced" / stem / name
+        # published-artifact-names: the copy carries the job's name, and the
+        # entry that points at it is rewritten to match, because the studio
+        # stores this name and posts it back for a proof.
+        published = published_candidate(job, name)
         if source.is_file():
-            shutil.copy2(source, job_dir / name)
+            shutil.copy2(source, job_dir / published)
+        if published != name:
+            renamed = True
+            entry = {**entry, "file": published}
         candidates.append(entry)
+    data["candidates"] = candidates
+    if renamed:
+        (job_dir / "comparison.json").write_text(json.dumps(data, indent=2),
+                                                 encoding="utf-8")
+    else:
+        shutil.copy2(report, job_dir / "comparison.json")
     return candidates
 
 
@@ -535,13 +656,19 @@ def build_dataset_archive(dataset_dir: Path, out_path: Path) -> Path | None:
 
 
 def build_proof_dataset(job: dict, validation: dict, manifest: dict,
-                        candidate: str, spec_path: Path):
+                        candidate: str, spec_path: Path,
+                        proof_path: Path | None = None,
+                        manifest_path: Path | None = None):
     """Run the opt-in dataset stage; return the manifest's ``dataset`` value.
 
     None means the spec did not ask for it, which is the default.  Anything else
     raises, and run_back records that as a NOTE on the manifest instead of
     failing the validation: the proof is the deliverable and it already
     succeeded by the time this runs.
+
+    ``proof_path``/``manifest_path`` are the files run_back actually PUBLISHED
+    (a job's name is part of them); both default to the pipeline's own spelling
+    so a direct caller keeps working.
     """
     spec: dict = {}
     if spec_path.is_file():
@@ -567,9 +694,10 @@ def build_proof_dataset(job: dict, validation: dict, manifest: dict,
     # Provenance points at the manifest ON DISK (run_back has already copied
     # it): a reader of dataset.json can open the file it was derived from. The
     # in-memory dict is the fallback for a job directory without one.
-    manifest_file = job_dir / f"{candidate_stem}.manifest.json"
+    manifest_file = manifest_path or (job_dir / f"{candidate_stem}.manifest.json")
+    proof_file = proof_path or (job_dir / f"{candidate_stem}.proof.png")
     description = pv.build_dataset(
-        job_dir / f"{candidate_stem}.proof.png", job_dir / candidate, out_dir,
+        proof_file, job_dir / candidate, out_dir,
         transforms=plan,
         manifest=manifest_file if manifest_file.is_file() else manifest,
         stem=candidate_stem)
@@ -611,29 +739,35 @@ def run_back(validation: dict) -> None:
     job = JOBS[validation["job_id"]]
     with PIPELINE_LOCK:
         validation["state"] = "running"
+        # The caller's candidate_file is the PUBLISHED name (that is what the
+        # comparison told the studio). The print check is handed the pipeline's
+        # own spelling, because that half's input/output names are its contract.
         candidate = validation["candidate_file"]
+        internal = internal_candidate(candidate)
         stem = job["stem"]
         candidate_dir = PROJECT / "02_traced" / stem
         candidate_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(Path(job["dir"]) / candidate, candidate_dir / candidate)
+        shutil.copy2(Path(job["dir"]) / candidate, candidate_dir / internal)
         spec_path = Path(job["dir"]) / "spec.json"
-        _append_log(validation, f"pipeline.sh: {stem}/{candidate}")
-        code = _run_logged(validation, [str(PROJECT / "pipeline.sh"), str(candidate_dir / candidate)],
+        _append_log(validation, f"pipeline.sh: {stem}/{internal}")
+        code = _run_logged(validation, [str(PROJECT / "pipeline.sh"), str(candidate_dir / internal)],
                            {"SPEC": str(spec_path)})
-        candidate_stem = Path(candidate).stem
+        internal_stem = Path(internal).stem
         output_dir = PROJECT / "05_final"
-        manifest_path = output_dir / f"{candidate_stem}.manifest.json"
-        if not manifest_path.is_file():
+        built = output_dir / f"{internal_stem}.manifest.json"
+        if not built.is_file():
             raise RuntimeError(f"back pipeline exited {code} without manifest")
         job_dir = Path(job["dir"])
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        proof_name = f"{candidate_stem}.proof.png"
-        pdf_name = f"{candidate_stem}.print.pdf"
-        shutil.copy2(manifest_path, job_dir / f"{candidate_stem}.manifest.json")
-        shutil.copy2(output_dir / proof_name, job_dir / proof_name)
-        shutil.copy2(output_dir / pdf_name, job_dir / pdf_name)
-        manifest["proof"] = proof_name
-        manifest["print_pdf"] = pdf_name
+        manifest = json.loads(built.read_text(encoding="utf-8"))
+        # published-artifact-names: the proof is published under the job's name
+        # and the manifest is rewritten to name the files it actually shipped
+        # with, so a reader of it (the studio, the dataset stage) resolves them.
+        names = published_proof_files(job, candidate)
+        shutil.copy2(built, job_dir / names["manifest"])
+        shutil.copy2(output_dir / f"{internal_stem}.proof.png", job_dir / names["png"])
+        shutil.copy2(output_dir / f"{internal_stem}.print.pdf", job_dir / names["pdf"])
+        manifest["proof"] = names["png"]
+        manifest["print_pdf"] = names["pdf"]
         # Opt-in dataset stage (spec: validation.variants).  It runs LAST and it
         # is additive: the proof, the print PDF, the manifest and the selected
         # SVG are never edited or replaced by it.  A failure here is recorded as
@@ -643,11 +777,27 @@ def run_back(validation: dict) -> None:
         # dataset-seam
         try:
             dataset = build_proof_dataset(job, validation, manifest, candidate,
-                                          spec_path)
+                                          spec_path,
+                                          proof_path=job_dir / names["png"],
+                                          manifest_path=job_dir / names["manifest"])
             if dataset:
                 manifest["dataset"] = dataset
         except Exception as exc:                      # noqa: BLE001 - report it
             note = "dataset stage failed: %s: %s" % (type(exc).__name__, exc)
+            if not isinstance(manifest.get("notes"), list):
+                manifest["notes"] = []
+            manifest["notes"].append(note)
+            _append_log(validation, note)
+        # published-artifact-names: the job directory's manifest describes the job
+        # directory, so the copy on disk is written LAST and names the files that
+        # were actually published (<name>-proof-01.png, not the pipeline's own
+        # spelling) plus whatever the dataset stage recorded. The copy above is
+        # what gives the dataset stage its provenance, so it stays where it is.
+        try:
+            (job_dir / names["manifest"]).write_text(
+                json.dumps(manifest, indent=2), encoding="utf-8")
+        except OSError as exc:                        # noqa: BLE001 - report it
+            note = "manifest copy failed: %s: %s" % (type(exc).__name__, exc)
             if not isinstance(manifest.get("notes"), list):
                 manifest["notes"] = []
             manifest["notes"].append(note)
@@ -1008,7 +1158,12 @@ class Handler(BaseHTTPRequestHandler):
             job = {"id": job_id, "name": name, "stem": slug(name), "dir": str(job_dir),
                    "container_input_path": input_path, "spec": body.get("spec") or {},
                    "state": "queued", "log": [], "candidates": [], "comparison": None,
-                   "prep_summary": None, "error": None, "cancel": False, "proc": None}
+                   "prep_summary": None, "error": None, "cancel": False, "proc": None,
+                   # published-artifact-names: the operator's name is stamped into
+                   # every artifact this job publishes, so keep its slug with the
+                   # job -- `stem` is the INPUT's stem and gets overwritten by
+                   # run_front, so it cannot carry this.
+                   NAME_SLUG_KEY: slug(name)}
             with STATE_LOCK:
                 JOBS[job_id] = job
             threading.Thread(target=guarded, args=(run_front, job), daemon=True).start()
@@ -1073,7 +1228,14 @@ class Handler(BaseHTTPRequestHandler):
                     self.json_response(404, {"error": "no such validation"})
                     return
             candidate_stem = Path(candidate_file).stem
-            manifest_path = Path(job["dir"]) / f"{candidate_stem}.manifest.json" if job else None
+            # published-artifact-names: the proof's manifest is published under
+            # the job's name, so resolve THAT name -- with the pipeline's own
+            # spelling as the fallback for a job directory published before the
+            # rename (where the caller still sends a plain candidate_NN.svg).
+            manifest_path = Path(job["dir"]) / published_proof_files(job, candidate_file)["manifest"] if job else None
+            if not manifest_path or not manifest_path.is_file():
+                legacy = Path(job["dir"]) / f"{Path(internal_candidate(candidate_file)).stem}.manifest.json" if job else None
+                manifest_path = legacy if legacy and legacy.is_file() else manifest_path
             if not manifest_path or not manifest_path.is_file():
                 self.json_response(404, {"error": f"manifest not found for {candidate_stem}"})
                 return

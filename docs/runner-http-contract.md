@@ -96,6 +96,34 @@ tile self-hides), then `02_traced/<stem>/<name>`, then `05_final/<name>`, then
 paths are NOT evidence the artifact is servable — resolve the basename through
 this proxy and check the status before claiming it serves.
 
+## Published artifact names — a job's name is part of what it ships
+
+A job filed through `POST /jobs` with a `name` publishes its artifacts under
+that name, so a downloaded 7z (or a saved favourite) says which run it came from:
+
+    <name slug>-candidate-01.svg
+    <name slug>-proof-01.png / .pdf / .manifest.json
+
+The slug is lowercased with runs of non-alphanumerics collapsed to `-`
+(`slug()`), so `jobby the boat` publishes `jobby-the-boat-proof-01.png`.
+
+- **The pipeline's own names are untouched.** `02_traced/<stem>/candidate_NN.svg`
+  and `05_final/<candidate stem>.proof.png` are written by the trace stage and
+  the print check exactly as before — those names are that half's contract. The
+  runner renames at PUBLISH time (the copy into the job directory) and rewrites
+  the two things that carry a name back to a caller: the comparison entry's
+  `file` and the manifest's `proof` / `print_pdf`.
+- **A job with no name of its own publishes the pipeline's names verbatim.** A
+  job dict rebuilt by the startup reindex has no `name_slug`, and a job directory
+  published before this change already holds `candidate_01.svg` /
+  `candidate_01.proof.png` on disk — inventing a new spelling there would break
+  every stored reference to those files. Both spellings are therefore live, and
+  the file proxy resolves either (a `<name>-candidate-NN.svg` whose job-dir copy
+  is absent falls through to `02_traced/<stem>/candidate_NN.svg`; a
+  `<name>-proof-NN.png|.pdf|.manifest.json` to the matching `05_final` file).
+- **`POST /validations` accepts EITHER spelling** of `candidate_file` and maps a
+  published one back to the pipeline's own before `pipeline.sh` runs on it.
+
 ## Recolour seam — implemented, **unbuilt** (no consumer)
 
 `POST /recolour` and `POST /recolour/colours` **exist and are unit-tested**

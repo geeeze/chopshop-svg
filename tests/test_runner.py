@@ -382,3 +382,103 @@ def test_compose_route_refuses_a_raster_layer_that_is_a_path(monkeypatch):
     assert status == 422
     assert json.loads(body)["kind"] == "invalid_spec"
     assert b"data:" in body
+
+
+# ------------------------------------------------- published artifact names --
+#
+# A job's NAME is stamped into the filenames it publishes
+# (<name>-candidate-01.svg / <name>-proof-01.png), while the pipeline's own
+# names stay exactly as they are. These pin both the mapping and the two
+# properties that make it safe to ship: a job with no name of its own is left
+# completely alone, and the mapping runs BOTH ways (the studio posts the
+# published candidate name back for a proof).
+
+NAMED = {"name": "jobby the boat", "name_slug": "jobby-the-boat"}
+
+
+def test_a_published_candidate_carries_the_job_name():
+    assert runner.published_candidate(NAMED, "candidate_06.svg") == \
+        "jobby-the-boat-candidate-06.svg"
+
+
+def test_a_node_reduce_copy_keeps_its_own_name():
+    """Only the pipeline's own candidate_NN pattern is republished: a file the
+    trace stage did not name that way is copied through untouched."""
+    assert runner.published_candidate(NAMED, "candidate_06.reduced.svg") == \
+        "candidate_06.reduced.svg"
+
+
+def test_a_job_with_no_name_publishes_the_pipelines_own_names():
+    """A reindexed job dir (rebuild after a restart) carries no name_slug, and
+    must NOT be renamed: it already holds those names on disk and every stored
+    reference points at them."""
+    for job in ({}, {"name": "artwork"}, {"name_slug": ""}, {"name_slug": None}):
+        assert runner.published_candidate(job, "candidate_06.svg") == "candidate_06.svg"
+        assert runner.published_proof_files(job, "candidate_06.svg") == {
+            "png": "candidate_06.proof.png",
+            "pdf": "candidate_06.print.pdf",
+            "manifest": "candidate_06.manifest.json",
+        }
+
+
+def test_proofs_are_published_under_the_job_name_for_either_candidate_spelling():
+    expected = {"png": "jobby-the-boat-proof-06.png",
+                "pdf": "jobby-the-boat-proof-06.pdf",
+                "manifest": "jobby-the-boat-proof-06.manifest.json"}
+    assert runner.published_proof_files(NAMED, "jobby-the-boat-candidate-06.svg") == expected
+    assert runner.published_proof_files(NAMED, "candidate_06.svg") == expected
+
+
+def test_a_published_name_maps_back_to_the_pipelines_own():
+    assert runner.internal_candidate("jobby-the-boat-candidate-06.svg") == "candidate_06.svg"
+    # Already the pipeline's spelling: unchanged, so this is safe on ANY input.
+    assert runner.internal_candidate("candidate_06.svg") == "candidate_06.svg"
+    # Not a candidate at all: the proof name must not be "mapped" into one.
+    assert runner.internal_candidate("jobby-the-boat-proof-06.png") == \
+        "jobby-the-boat-proof-06.png"
+
+
+def test_a_published_candidate_serves_from_the_traced_tree(tmp_path):
+    """A published name whose job-directory copy is gone (pruned, or a job dir
+    published before the rename) still resolves from 02_traced."""
+    traced = tmp_path / "02_traced" / "artwork" / "candidate_06.svg"
+    traced.parent.mkdir(parents=True)
+    traced.write_text("<svg/>", encoding="utf-8")
+
+    assert runner.artifact_path(tmp_path, stem="artwork",
+                               name="jobby-candidate-06.svg",
+                               job_dir=tmp_path / "jobs" / "abc") == traced
+
+
+def test_a_published_proof_serves_from_the_final_tree(tmp_path):
+    """Same for a proof: <name>-proof-06.png resolves to the pipeline's own
+    candidate_06.proof.png when the job-dir copy is not there."""
+    final = tmp_path / "05_final"
+    final.mkdir(parents=True)
+    png = final / "candidate_06.proof.png"
+    pdf = final / "candidate_06.print.pdf"
+    manifest = final / "candidate_06.manifest.json"
+    for path in (png, pdf, manifest):
+        path.write_bytes(b"x")
+
+    for name, expected in (("jobby-proof-06.png", png),
+                           ("jobby-proof-06.pdf", pdf),
+                           ("jobby-proof-06.manifest.json", manifest)):
+        assert runner.artifact_path(tmp_path, stem="artwork", name=name,
+                                    job_dir=tmp_path / "jobs" / "abc") == expected
+
+
+def test_a_job_directory_copy_wins_over_the_pipeline_tree(tmp_path):
+    """The published copy in the job directory is the artifact of record: the
+    project tree is only the fallback."""
+    traced = tmp_path / "02_traced" / "artwork" / "candidate_06.svg"
+    traced.parent.mkdir(parents=True)
+    traced.write_text("<svg/>", encoding="utf-8")
+    job_dir = tmp_path / "jobs" / "abc"
+    job_dir.mkdir(parents=True)
+    published = job_dir / "jobby-candidate-06.svg"
+    published.write_text("<svg/>", encoding="utf-8")
+
+    assert runner.artifact_path(tmp_path, stem="artwork",
+                               name="jobby-candidate-06.svg",
+                               job_dir=job_dir) == published

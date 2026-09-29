@@ -662,3 +662,103 @@ def test_the_dataset_archive_is_500_when_7z_is_missing(workdir, monkeypatch,
     status, _headers, body = get(endpoint, "/jobs/jobAAA/dataset")
     assert status == 500
     assert b"7z unavailable" in body
+
+
+# ------------------------------------------- published artifact names -------
+#
+# The name-stamping path, driven for real through the synthetic project tree:
+# _copy_front_outputs publishes the candidates a job's directory serves and
+# run_back publishes the proof. Both directions matter -- the studio stores the
+# published candidate name and posts it BACK to /validations, so run_back has to
+# map it to the pipeline's own spelling before the print check runs.
+
+NAMED_CANDIDATE = "jobby-the-boat-candidate-02.svg"
+
+
+def named_job(jobs, project, *, candidate=NAMED_CANDIDATE):
+    """A job that passed the front half under a NAMED run."""
+    job_dir = jobs / "jobNAMED"
+    (job_dir / "input").mkdir(parents=True)
+    (job_dir / "input" / "artwork.png").write_bytes(make_png())
+    spec = make_spec()
+    (job_dir / "spec.json").write_text(json.dumps(spec), encoding="utf-8")
+    (job_dir / candidate).write_text(SVG, encoding="utf-8")
+    job = {"id": "jobNAMED", "name": "jobby the boat", "name_slug": "jobby-the-boat",
+           "stem": "artwork", "dir": str(job_dir), "container_input_path": "",
+           "spec": spec, "state": "done", "log": [],
+           "candidates": [{"file": candidate}], "comparison": None,
+           "prep_summary": None, "error": None, "cancel": False, "proc": None}
+    runner.JOBS["jobNAMED"] = job
+    return job
+
+
+def test_front_outputs_are_published_under_the_job_name(workdir):
+    project, jobs = workdir
+    job_dir = jobs / "jobNAMED"
+    job_dir.mkdir()
+    traced = project / "02_traced" / "artwork"
+    traced.mkdir(parents=True)
+    for name in ("candidate_02.svg", "candidate_05.svg"):
+        (traced / name).write_text(SVG, encoding="utf-8")
+    (project / "04_validated").mkdir(parents=True)
+    (project / "04_validated" / "artwork.comparison.json").write_text(
+        json.dumps({"candidates": [{"file": "candidate_02.svg"},
+                                   {"file": "candidate_05.svg"}]}), encoding="utf-8")
+    job = {"id": "jobNAMED", "name": "jobby the boat", "name_slug": "jobby-the-boat",
+           "stem": "artwork", "dir": str(job_dir), "spec": {}, "state": "running",
+           "log": [], "candidates": [], "comparison": None, "prep_summary": None,
+           "error": None, "cancel": False, "proc": None}
+
+    candidates = runner._copy_front_outputs(job, "artwork")
+
+    assert [c["file"] for c in candidates] == ["jobby-the-boat-candidate-02.svg",
+                                               "jobby-the-boat-candidate-05.svg"]
+    for name in ("jobby-the-boat-candidate-02.svg", "jobby-the-boat-candidate-05.svg"):
+        assert (job_dir / name).is_file(), "the copy the file route serves"
+    assert "candidate_02.svg" not in [p.name for p in job_dir.iterdir()], \
+        "the pipeline's own name is not ALSO published -- one name per artifact"
+
+    # The comparison the caller reads (run_front re-reads this file) says the
+    # same thing the entries do, or the studio would store a name it cannot fetch.
+    served = json.loads((job_dir / "comparison.json").read_text(encoding="utf-8"))
+    assert [c["file"] for c in served["candidates"]] == \
+        [c["file"] for c in candidates]
+
+
+def test_run_back_publishes_the_proof_under_the_job_name(workdir, monkeypatch):
+    project, jobs = workdir
+    job = named_job(jobs, project)
+    job_dir = Path(job["dir"])
+
+    validation = run_back(job, monkeypatch, project, candidate=NAMED_CANDIDATE)
+
+    assert validation["state"] == "done"
+    assert validation["manifest"]["proof"] == "jobby-the-boat-proof-02.png"
+    assert validation["manifest"]["print_pdf"] == "jobby-the-boat-proof-02.pdf"
+    for name in ("jobby-the-boat-proof-02.png", "jobby-the-boat-proof-02.pdf",
+                 "jobby-the-boat-proof-02.manifest.json"):
+        assert (job_dir / name).is_file(), name
+    on_disk = json.loads((job_dir / "jobby-the-boat-proof-02.manifest.json")
+                         .read_text(encoding="utf-8"))
+    assert on_disk["proof"] == "jobby-the-boat-proof-02.png", \
+        "the manifest names the file that was actually published"
+
+    # The pipeline never sees the job's name: the print check ran on its own
+    # candidate_NN.svg, which is the half AGENTS.md freezes.
+    assert (project / "02_traced" / "artwork" / "candidate_02.svg").is_file()
+    assert not (project / "02_traced" / "artwork" / NAMED_CANDIDATE).exists()
+
+
+def test_a_named_job_still_serves_through_the_file_route(workdir, monkeypatch):
+    """The published bytes are reachable by the name the studio holds -- the
+    whole point of the rename, and the one thing a unit test on the mapper
+    cannot show."""
+    project, jobs = workdir
+    job = named_job(jobs, project)
+    job_dir = Path(job["dir"])
+    run_back(job, monkeypatch, project, candidate=NAMED_CANDIDATE)
+
+    for name in (NAMED_CANDIDATE, "jobby-the-boat-proof-02.png",
+                 "jobby-the-boat-proof-02.pdf"):
+        assert runner.artifact_path(project, stem=job["stem"], name=name,
+                                    job_dir=job_dir) == job_dir / name

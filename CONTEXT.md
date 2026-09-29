@@ -92,6 +92,14 @@ is which candidate to print.
   (see "Composition" in `README.md` and `docs/runner-http-contract.md`).
 - No other tracked in-flight feature at the time of writing. If you start one,
   list it here with an owner and a note.
+- **Published artifact names (landed in `runner.py`, not a pipeline change).** A
+  job filed with a name publishes `<name slug>-candidate-NN.svg` and
+  `<name slug>-proof-NN.png/.pdf/.manifest.json` in its JOB DIRECTORY; the trace
+  stage's and the print check's own names (`02_traced/<stem>/candidate_NN.svg`,
+  `05_final/<candidate stem>.proof.png`) are untouched, and a job dict with no
+  `name_slug` — a reindexed job dir — keeps the pipeline's names exactly.
+  Both spellings resolve through the file proxy and through `POST /validations`.
+  Contract section: `docs/runner-http-contract.md` ("Published artifact names").
 
 ## Blockers
 
@@ -103,12 +111,12 @@ is which candidate to print.
   test count — `README.md` and `docs/OVERVIEW.md` point here instead, because the
   number moves with every change and three stale copies were three chances to
   mislead. Verified on a full checkout with the repo venv:
-  `.venv/bin/python -m pytest tests -q` collects **763**. Re-run it and update
-  this line when you touch the suite. (`AGENTS.md` still carries an older number
-  — 400 — and it is owned by the parent agent, not by this working-state file; an
-  agent session CANNOT correct it, because the write guard refuses edits to a
-  protected agent-instruction file and says not to route around it. It needs a
-  human or an approved edit.)
+  `.venv/bin/python -m pytest tests -q` collects **774** and passes
+  **729 passed, 45 skipped**. Re-run it and update this line when you touch the
+  suite. (`AGENTS.md` still carries an older number — 400 — and it is owned by the
+  parent agent, not by this working-state file; an agent session CANNOT correct it,
+  because the write guard refuses edits to a protected agent-instruction file and
+  says not to route around it. It needs a human or an approved edit.)
 
 - **Two Pythons, and the docs name only one.** `AGENTS.md:76` says "Python 3.13
   through a repo-root venv", which is TRUE of the container: the Dockerfile is
