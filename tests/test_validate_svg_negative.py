@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-test_validate_svg_negative.py -- four deliberate-failure tests for validate_svg.py.
+test_validate_svg_negative.py -- deliberate-failure tests for validate_svg.py.
 
 Every test here constructs an SVG in `tmp_path` that violates exactly one rule of
 the spec, runs the real CLI as a subprocess, and asserts BOTH:
@@ -169,6 +169,89 @@ def test_fails_on_open_path_vinyl(tmp_path):
     assert "cutline" in out, out
     # The start point is printed so the open contour can be found by hand.
     assert "(20, 20)" in out, out
+
+
+# ---------------------------------------------------------------------------
+# 5. Paint servers, while gradients are banned
+# ---------------------------------------------------------------------------
+
+def test_fails_on_gradient_when_gradients_are_banned(tmp_path):
+    """geometry.allow_gradients=false is a hard gate, not a layer B courtesy.
+
+    Until this rule existed, this file exited 0 with zero findings -- only the
+    rendered ink count caught it, and that only if layer B ran at all.
+    """
+    body = ('<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="0">'
+            '<stop offset="0" stop-color="#FF0000"/>'
+            '<stop offset="1" stop-color="#00FF00"/></linearGradient></defs>'
+            '<rect width="40" height="40" fill="url(#g)"/>')
+    spec = {"max_colors": 100,
+            "geometry": {"allow_raster_embed": True,
+                         "allow_open_paths": True,
+                         "allow_gradients": False,
+                         "min_stroke_width_pt": 0}}
+
+    code, out = run_cli(tmp_path, body, spec)
+
+    assert code == 1, "expected exit 1, got %d\n%s" % (code, out)
+    assert "[GRADIENT_NOT_ALLOWED]" in out, out
+    # Both the declaration and the paint site are named, so the fix is locatable.
+    assert "gradient definition" in out, out
+    assert "url(#g)" in out, out
+
+
+def test_gradient_passes_when_the_spec_allows_it(tmp_path):
+    """allow_gradients=true is CMYK process work, and must not be rejected."""
+    body = ('<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="0">'
+            '<stop offset="0" stop-color="#FF0000"/>'
+            '<stop offset="1" stop-color="#00FF00"/></linearGradient></defs>'
+            '<rect width="40" height="40" fill="url(#g)"/>')
+    spec = {"max_colors": 100,
+            "geometry": {"allow_raster_embed": True,
+                         "allow_open_paths": True,
+                         "allow_gradients": True,
+                         "min_stroke_width_pt": 0}}
+
+    code, out = run_cli(tmp_path, body, spec)
+
+    assert code == 0, "gradients were allowed but the file failed:\n%s" % out
+    assert "[GRADIENT_NOT_ALLOWED]" not in out, out
+
+
+def test_rasterising_element_fails_where_image_would(tmp_path):
+    """<foreignObject> is a bitmap in all but name, and must be rejected too."""
+    body = ('<foreignObject width="10" height="10">'
+            '<div xmlns="http://www.w3.org/1999/xhtml">x</div></foreignObject>')
+    spec = {"max_colors": 100,
+            "geometry": {"allow_raster_embed": False,
+                         "allow_open_paths": True,
+                         "min_stroke_width_pt": 0}}
+
+    code, out = run_cli(tmp_path, body, spec)
+
+    assert code == 1, "expected exit 1, got %d\n%s" % (code, out)
+    assert "[RASTER_EMBED]" in out, out
+    assert "foreignObject" in out, out
+    assert "vector-only" in out, out
+
+
+def test_filter_reference_is_advisory_not_a_failure(tmp_path):
+    """A filter can change the ink, but layer A cannot measure it: advice only.
+
+    The exit code is the contract here: 0 with the advisory printed, so a job
+    with a soft drop shadow is reported rather than rejected.
+    """
+    body = ('<filter id="b"><feGaussianBlur stdDeviation="3"/></filter>'
+            '<rect width="40" height="40" fill="#FFFFFF" filter="url(#b)"/>')
+    spec = {"max_colors": 100,
+            "geometry": {"allow_raster_embed": False,
+                         "allow_open_paths": True,
+                         "min_stroke_width_pt": 0}}
+
+    code, out = run_cli(tmp_path, body, spec)
+
+    assert code == 0, "an advisory must not fail the job:\n%s" % out
+    assert "EFFECT_REFERENCE" in out, out
 
 
 if __name__ == "__main__":

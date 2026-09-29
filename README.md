@@ -77,9 +77,12 @@ a spec without the key behaves exactly as before, and an empty block is a no-op.
 **`scripts/palette_variants.py` is not one of them, and no pipeline call reaches
 it.** It is a fourth bench and it is **standalone and unwired**: no stage in
 `front_pipeline.sh` or `pipeline.sh` runs it, it has no `prep_expand` key and no
-spec key of its own, and nothing calls it except its own tests and a hand-run
-command line (see *Palette variations* below). The three above are wired; this
-one is the exception.
+spec key of its own, and no pipeline stage calls its command line (see *Palette
+variations* below). Unwired as a *stage* is not the same as unused as a
+*module*: the proof-variant dataset stage imports its colour-mapping machinery
+(`proof_variants.py` calls `as_hex` / `apply_mapping` / `declared_colours`), so
+the colour maths has one tested implementation and two callers. The three above
+are wired as stages; this one is the exception.
 
 ```bash
 # the same three, driven by the spec, in the right order
@@ -146,6 +149,23 @@ on real candidates: one clears at 965 → 391 with a 2px gap, another at
 Candidates are sorted by *fewest hard failures, then fewest advisories* — and
 nothing more. The pixel-fidelity ranking is shown separately as a second lens.
 Pick what looks right for your job.
+
+**The graded candidate set is the sweep's own record, not the directory.**
+`02_traced/<stem>` is shared per artwork stem and persists across runs, so a
+rerun with a smaller cap, a different preset set or a lower `max_candidates` used
+to leave the previous run's higher-numbered `candidate_NN.svg` files on disk,
+where `compare_candidates.py` graded them as if this sweep had produced them.
+`compare_candidates.py` now grades exactly the `candidates` list in
+`02_traced/<stem>/sweep.json`. Anything else matching `candidate_\d+\.svg` is
+reported as a non-graded **stale** bucket (`stale_candidates`,
+`stale_candidate_count` in the comparison JSON and a *Not graded (stale)* section
+in the markdown) and is never rendered or measured. When `sweep.json` is absent
+or unreadable the old directory glob is used, and `graded_set_source` says which rule
+applied. `trace_sweep.py` also deletes the candidates it did not write, after a
+successful sweep (recorded as `stale_removed` in `sweep.json`) — but the record
+is the authority if the two ever disagree. Candidate naming is unchanged:
+`candidate_%02d.svg` by sweep index, and a second job with the same artwork name
+continues the same numbering.
 
 ---
 
@@ -225,8 +245,8 @@ it; any key you omit falls back to its default below.
 |---|---|---|---|
 | `min_stroke_width_pt` | number | *(none)* | Minimum stroke width; thinner strokes are a hard finding. |
 | `max_nodes_per_path` | int | *(none)* | Node-count limit per path (trace weight / RIP load). |
-| `allow_raster_embed` | bool | `false` | Whether `<image>` raster embeds are permitted (default bans them). |
-| `allow_gradients` | bool | `false` | Whether gradients / continuous tone are allowed. Also gates the trace stage's `photo` preset. |
+| `allow_raster_embed` | bool | `false` | Whether raster embeds are permitted (default bans them). Layer A counts every route to a bitmap: `<image>` anywhere (including inside a `<pattern>`), `<feImage>` with a `data:`/file/external href, `<foreignObject>` (it rasterises XHTML), an `<image>`/`<use>` naming an external document or a `data:` URI, and `url(data:image/...)` in a `<style>` block or an inline style. A document-internal `href="#id"` stays vector and is not reported. Layer B's placed-image PPI check still reads the rendered result. |
+| `allow_gradients` | bool | `false` | Whether gradients / continuous tone are allowed. Also gates the trace stage's `photo` preset. **When false this is a Layer A hard gate** (`GRADIENT_NOT_ALLOWED`), not only a Layer B measurement: a declared `<linearGradient>`/`<radialGradient>`, or any paint-server reference (`url(...)` in `fill` / `stroke` / `stop-color` / `flood-color` / `lighting-color`, whether written as an attribute, in an inline style or in a `<style>` block), fails the file, naming each offender and what its `url()` resolves to. A `url(...)` that resolves to nothing in this document is reported too — never passed, because it cannot be proven to be a flat colour. Layer B still measures the rendered tone (`CONTINUOUS_TONE`): a declaration is not an ink count. |
 | `allow_open_paths` | bool | `true` | Whether open (unclosed) paths are acceptable. |
 | `gradient_handling` | string | `""` | How gradients are treated: `vector_halftone`, `embedded_raster`, etc. |
 | `halftone_handling` | string | `""` | How halftones are treated. |
@@ -274,6 +294,22 @@ The render-preflight tolerances and the trace-stage prep/trace defaults.
 - The trace stage owns the four `print.*` keys marked *Trace stage* above; the
   rest belong to the print check. See `scripts/TRACE_STAGE.md` for the trace-stage
   specifics.
+- **Layer A enforces what the spec says, and reports what it cannot prove.**
+  The source-level gate reads declarations. What it *can* read it now enforces:
+  `allow_gradients` is a hard gate (`GRADIENT_NOT_ALLOWED`), the colour budget
+  counts the implicit black of a shape whose cascade never sets `fill` and
+  resolves `currentColor` from the inherited `color`, the stroke-width check
+  ignores paint that cannot ink (`display:none`, `visibility:hidden`,
+  `opacity:0`, `stroke-opacity:0`, geometry inside a `<clipPath>`, and
+  definition content nothing references), and `!important` is ranked in the
+  cascade. What it cannot read it reports as NOTES, never as failures — a
+  `filter` / `mask` / `clip-path` reference (`EFFECT_REFERENCE`), an opacity
+  strictly between 0 and 1 (`TRANSLUCENT_PAINT`), and skipped definition
+  content (`UNCHECKED_DEFINITION`, with a count, so partial coverage is
+  visible). Nothing unmeasurable can fail a job. The honest list of what is
+  still out of reach — the rendered result, a gradient's real ink, a blend, a
+  font substitution — is the "Known limitations" section of `validate_svg.py`;
+  read it before trusting a pass.
 
 ---
 
@@ -337,6 +373,8 @@ chopshop-svg/
 ├── skills/                    # in-repo agent skill (references/ docs)
 ├── 00_source/                 # example raster/SVG batch for the print check
 └── 01_prepped/ 02_traced/ 04_validated/ 05_final/ 06_run/ 07_palettes/ 08_tune/ 09_filters/   # generated (gitignored)
+                              #  05_final/ also holds per-artwork subdirs and
+                              #  <artwork>.<candidate>.<RUN_ID>.* run copies
 ```
 
 ---
@@ -367,10 +405,41 @@ only, no SHA duplicates). A candidate can fail production yet still be worth
 keeping as a style reference.
 
 The human decision + visual review are recorded by convention (both optional,
-both flagged as missing links until they exist):
+both flagged as missing links until they exist). The artwork-scoped name is
+preferred; the shared flat name is still read as a fallback:
 
-- `05_final/<candidate>.pick.json` — `{"selected": true, "label": "production|style_reference|needs_retrace|discard", "reason": "..."}`
-- `05_final/<candidate>.visual_review.md` — the visual-inspection report
+- `05_final/<artwork>/<candidate>.pick.json` (preferred) or the legacy shared
+  `05_final/<candidate>.pick.json` — `{"selected": true, "label": "production|style_reference|needs_retrace|discard", "reason": "..."}`
+- `05_final/<artwork>/<candidate>.visual_review.md` (preferred) or the legacy
+  shared `05_final/<candidate>.visual_review.md` — the visual-inspection report
+
+`run_record.py` reads the artwork-scoped name first and falls back to the shared
+one only when it is absent; when it does, it marks that artefact
+`"path_scope": "flat-shared"` and lists it under the candidate's `anomalies`, so a
+shared file is never recorded as if it were this run's.
+
+### Artefact naming: every output names its artwork
+
+`pipeline.sh` publishes each artefact under three names, additively. The artwork
+stem is the directory the candidate was run from (`02_traced/<artwork>/`, which
+is what `runner.py` passes in); a path handed straight to the script
+(`00_source/art.svg`) is its own artwork.
+
+| Name | Notes |
+|---|---|
+| `05_final/<candidate>.{manifest.json,proof.png,print.pdf,layer_b.txt}`, `04_validated/<candidate>.layer_a.txt` | The canonical names — `runner.py`, the studio and `orphan_sweep.py` are built around them. **Shared**: every artwork whose trace produced a `candidate_04` writes the same `05_final/candidate_04.manifest.json` |
+| `05_final/<artwork>/<candidate>.{manifest.json,proof.png,print.pdf,layer_b.txt}`, `04_validated/<artwork>.<candidate>.layer_a.txt` | Artwork-scoped — the only names that separate two artworks whose trace produced the same candidate file stem. Preferred by `run_record.py` |
+| `05_final/<artwork>.<candidate>.<RUN_ID>.{manifest.json,proof.png,print.pdf}` | Run-unique copy of one back-half run (`RUN_ID` = timestamp + 4 random bytes), attributable to artwork *and* candidate |
+
+Before this, the flat name was shared state: a later artwork's run record could
+read an earlier artwork's manifest, proof and human pick, because the only stem a
+back-half run knows is the candidate's file name. Layer B's scratch directory is
+per (artwork, candidate) now too — `.preflight-work/<artwork>/<candidate>/` — so
+two runs of the same candidate stem can no longer race on the same proof, PDF or
+`sep*.tif` cleanup. `05_final/` is not a swept column (`orphan_sweep.py`'s
+`STEM_DIRS` are `01_prepped/`, `02_traced/`, `04_validated/`), so an artwork
+subdirectory there is never classified as an orphan; the scoped Layer A report is
+`<artwork>.`-prefixed in `04_validated/`, so it stays attributable to its artwork.
 
 ---
 
@@ -622,7 +691,10 @@ Safety properties, in the script's own order of importance:
 - a stem matches as `name == stem` or `name.startswith(stem + ".")`, so stem `a`
   never matches `ab.svg`, and only a whitelist of suffixes the pipeline actually
   writes is stem-matched — `04_validated/candidate_01.layer_a.txt` is
-  candidate-keyed, so it is reported as not-stem-keyed and left alone;
+  candidate-keyed, so it is reported as not-stem-keyed and left alone; the
+  artwork-scoped `04_validated/<artwork>.candidate_01.layer_a.txt` IS
+  `<artwork>.`-prefixed (so it is attributable), but its suffix is outside the
+  whitelist, so it is reported and kept as well;
 - symlinks are never followed (a symlinked entry is skipped and reported), so the
   sweep cannot be talked into deleting outside the tree it was given;
 - the whole plan is aborted if it exceeds `--max-delete` (default `2000`);
@@ -644,10 +716,13 @@ re-colours it onto each palette in `scripts/palettes.json`. **The CAD structure
 is never touched**: no path, node, `viewBox` or dimension changes, only
 `fill` / `stroke` / `stop-color`. Same geometry, new colour vectors.
 
-**It is standalone and unwired.** No stage, no spec key and no pipeline call
-reaches this bench: you run it by hand (or from your own script), and the rest of
-the repo does not depend on it. The only other place it is used is the runner's
-recolour seam, which is itself unbuilt — see `docs/runner-http-contract.md`.
+**It is standalone and unwired as a stage.** No stage, no spec key and no
+pipeline call reaches this bench's command line: you run it by hand (or from your
+own script). Its colour-mapping machinery is another matter — the proof-variant
+dataset stage (`scripts/proof_variants.py`) imports `as_hex`, `apply_mapping`
+and `declared_colours` from it, so the paint-rewriting code is shared and
+tested once. The runner's recolour seam is the one other consumer of that same
+machinery, and it is itself unbuilt — see `docs/runner-http-contract.md`.
 
 ```bash
 .venv/bin/python scripts/palette_variants.py --list
@@ -857,6 +932,27 @@ ImageMagick is optional. With no engine on PATH the bench exits **3** with the
 install command and never substitutes a Python filter for the named one. Exit
 codes: 0 = every variant written, 1 = a variant failed, 2 = bad usage, 3 = no
 engine.
+
+### The output is reproducible, and no longer only on ImageMagick 7
+
+The bench's contract is that parallelism is an optimisation which must not change
+the result, and `test_parallel_matches_sequential` compares a `--workers 1` build
+against a `--workers 3` build **byte for byte**. ImageMagick stamps every PNG it
+writes with `date:create`, `date:modify` and `date:timestamp` tEXt chunks, so two
+runs of the same preset a second apart were never byte-identical even with
+identical pixels.
+
+`-define png:exclude-chunk=date,time` removes them on ImageMagick 7 (measured:
+7.1.1-43). It is **inert on 6.x** — measured on 6.9.12, all three chunks survive
+it — so the flake came back on any host with ImageMagick 6, and the test only
+passed when both builds happened to fall inside the same second. The bench now
+also runs a documented post-pass (`strip_png_time_chunks`) that drops exactly
+those three `tEXt` chunks from each non-`identity` output and rewrites the file
+atomically, so the property holds on either major version. Every other chunk —
+including `iCCP`/`sRGB`/`gAMA` profiles — and the pixel data are copied through
+byte for byte and in order; `-strip` is deliberately **not** used because it also
+removes profiles, which matters for print colour. `identity` stays a byte copy of
+its source, control first.
 
 ## Tests
 

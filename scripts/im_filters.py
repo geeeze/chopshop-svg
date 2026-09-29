@@ -52,6 +52,20 @@ edges, clean separation), and ``FloydSteinberg`` is offered as the
 photographic reading for comparison.  The report carries a ``dither`` column
 so a variant's reading is never ambiguous after the fact.
 
+A note on reproducibility
+-------------------------
+The bench's contract is that two runs of the same preset produce the same
+BYTES, so a parallel build and a sequential one can be compared directly.
+ImageMagick stamps every PNG it writes with `date:create`, `date:modify` and
+`date:timestamp` tEXt chunks.  The `-define png:exclude-chunk=date,time` that
+suppresses them is honoured on ImageMagick 7 but NOT on 6.9.12, so relying on
+the define alone would make reproducibility a property of the installed
+ImageMagick.  Every variant this bench writes is therefore post-processed by
+`strip_png_time_chunks`, which removes those three chunks and nothing else:
+profiles (`iCCP`, `sRGB`, `gAMA`) are kept because they carry print colour, and
+the pixel data is copied through byte for byte.  `identity` is exempt -- it is
+the byte copy of the source, control first.
+
 A note on colour type
 ---------------------
 Every reducing operation -- ``-colors``, ``-posterize`` AND ``-remap`` --
@@ -284,6 +298,116 @@ def png_meta(png_path):
 
 
 # --------------------------------------------------------------------------
+# Reproducible PNG output: strip the clock chunks ourselves
+#
+# `filter_argv` still passes `-define png:exclude-chunk=date,time` (harmless,
+# and correct on the ImageMagick it was measured on), but the reproducibility
+# property must not depend on the ImageMagick VERSION that wrote the file.
+# Measured only on IM 7.1.1-43; on IM 6.9.12 the same define leaves
+# `date:create`, `date:modify` and `date:timestamp` in the output, so two runs
+# of one preset a second apart differ byte for byte while the pixels are
+# identical -- which is exactly the flake `test_parallel_matches_sequential`
+# (workers=1 build vs workers=3 build, byte for byte) is meant to catch.
+#
+# So the bench post-processes every PNG it writes and drops ONLY those three
+# tEXt chunks.  `-strip` is NOT the tool: it also removes profiles (iCCP/sRGB/
+# gAMA), which is wrong for print colour -- profiles must survive.  Every
+# other chunk, the pixel data included, is copied through byte for byte and in
+# order; a stream this walker cannot parse is left exactly as it was, because
+# a reproducibility pass must never be able to corrupt an artifact.
+# --------------------------------------------------------------------------
+
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+# The three chunks ImageMagick stamps from the wall clock.  `date:create` and
+# `date:modify` mirror the file's own timestamps and `date:timestamp` records
+# the moment of encoding; none of them carries image data.
+TIME_CHUNK_KEYWORDS = ("date:create", "date:modify", "date:timestamp")
+
+
+def _split_png(data):
+    """Return ([(chunk_type, chunk_bytes), ...], trailing_bytes) or None.
+
+    None means "not a PNG this understands" (bad signature, a length that runs
+    past the end, or slack between the last chunk and EOF); callers must then
+    leave the file alone rather than rewrite a guess.
+    """
+    if not data.startswith(PNG_SIGNATURE):
+        return None
+    chunks = []
+    pos = len(PNG_SIGNATURE)
+    total = len(data)
+    while pos + 8 <= total:
+        length = int.from_bytes(data[pos:pos + 4], "big")
+        end = pos + 12 + length          # 4 length + 4 type + data + 4 CRC
+        if end > total:
+            return None
+        chunk_type = data[pos + 4:pos + 8]
+        chunks.append((chunk_type, data[pos:end]))
+        pos = end
+        if chunk_type == b"IEND":
+            return chunks, data[pos:]
+    if pos == total:
+        return chunks, b""
+    return None
+
+
+def _is_clock_chunk(chunk_type, chunk):
+    """True for an ImageMagick date/time tEXt chunk (keyword, not payload)."""
+    if chunk_type != b"tEXt":
+        return False
+    # tEXt payload is `keyword \\x00 text`, keyword Latin-1, 1-79 bytes.
+    keyword = chunk[8:].split(b"\x00", 1)[0]
+    return keyword.decode("latin-1", "replace") in TIME_CHUNK_KEYWORDS
+
+
+def strip_png_time_chunks_bytes(data):
+    """Drop ImageMagick's date/time tEXt chunks from a PNG byte string.
+
+    Returns ``data`` itself when there is nothing to drop (so an already-clean
+    file is not rewritten) or when the stream is not a PNG this understands.
+    """
+    parsed = _split_png(data)
+    if parsed is None:
+        return data
+    chunks, tail = parsed
+    kept = [(t, c) for t, c in chunks if not _is_clock_chunk(t, c)]
+    if len(kept) == len(chunks):
+        return data
+    return PNG_SIGNATURE + b"".join(c for _t, c in kept) + tail
+
+
+def strip_png_time_chunks(path):
+    """Rewrite ``path`` without ImageMagick's date/time tEXt chunks.
+
+    Returns True when the file was rewritten and False when it was already
+    clean (or is not a PNG this understands).  Never raises: reproducibility
+    is a property of the bytes, and a post-pass that could fail a variant the
+    engine already wrote would be worse than the flake it fixes.
+    """
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read()
+        cleaned = strip_png_time_chunks_bytes(data)
+        if cleaned == data:
+            return False
+        temp = path + ".clock-strip"
+        try:
+            with open(temp, "wb") as handle:
+                handle.write(cleaned)
+            os.replace(temp, path)
+        except OSError:
+            try:
+                os.unlink(temp)
+            except OSError:
+                pass
+            return False
+        return True
+    except OSError:
+        return False
+
+
+# --------------------------------------------------------------------------
 # Running one preset
 # --------------------------------------------------------------------------
 
@@ -390,6 +514,14 @@ def filter_argv(driver, src, dst, preset, flatten_hex=None, palettes=None):
         # date:modify` still writes `date:timestamp`; `-strip` also removes
         # profiles, which is wrong for print colour, so the targeted define is
         # the one used.
+        #
+        # The define is NOT sufficient on its own -- measured only on IM 7, it
+        # is inert on IM 6.9.12, where the same three chunks survive it and the
+        # bytes stay time-dependent.  It is kept (harmless, and correct where
+        # it works), and run_preset ALSO runs the file through
+        # `strip_png_time_chunks`, so the property is guaranteed by the bytes
+        # this bench writes rather than by the ImageMagick version that wrote
+        # them.  See the section note above that function.
         argv += ["-define", "png:exclude-chunk=date,time"]
     argv.append(dst)
     return argv
@@ -436,6 +568,13 @@ def run_preset(task):
             entry["error"] = "%s exited %d" % (driver, result.returncode)
             entry["stderr_tail"] = result.stderr.decode("utf-8", "replace")[-800:]
             return entry
+        # REPRODUCIBLE OUTPUT, second half: the define above is only known to
+        # work on ImageMagick 7.  Strip the clock chunks from what was actually
+        # written so the byte-for-byte contract does not depend on the engine
+        # version.  Only date:create/date:modify/date:timestamp go; profiles
+        # and pixel data are untouched (see strip_png_time_chunks).
+        entry["time_chunks_stripped"] = strip_png_time_chunks(dst)
+        #label-im-filters-strip-time-chunks
 
     try:
         entry.update(colour_stats(dst))

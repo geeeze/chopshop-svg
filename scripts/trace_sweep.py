@@ -52,6 +52,22 @@ preset and both hierarchical modes, then truncated to the cap.  If a sweep flag
 is unavailable in the detected tracer, that axis is skipped and recorded in
 sweep.json.
 
+The output directory (``02_traced/<stem>``) is shared per STEM and persists
+across runs, so a second job with the same artwork name continues the same
+candidate numbering -- naming stays ``candidate_%02d.svg`` by sweep index and is
+never renumbered to dodge a collision.  Because of that, once a sweep has
+succeeded the candidates it did NOT write are deleted
+(``prune_stale_candidates``): a rerun with a smaller cap would otherwise leave
+the previous run's higher-numbered files on disk, where the comparison stage
+could read them as this run's output.  Only ``candidate_\\d+\\.svg`` files this
+sweep did not produce are touched, and ``sweep.json``, the per-candidate
+checksum sidecars, ``.variants/`` and ``.palette/`` are never candidates.
+
+The authority for "what did this sweep produce" is ``sweep.json``'s
+``candidates`` list -- ``compare_candidates.py`` grades exactly that and reports
+anything else on disk as a non-graded stale bucket, so cleanup and record can
+never disagree about what a run owns.
+
 Usage::
 
     python scripts/trace_sweep.py 01_prepped/art.prepped.png spec.json \
@@ -429,6 +445,62 @@ def _trace_one(task):
     return record
 
 
+def prune_stale_candidates(out_dir, keep_files):
+    """Delete ``candidate_\\d+\\.svg`` files this sweep did NOT produce.
+
+    WHY
+    ---
+    ``02_traced/<stem>`` is per-STEM and persistent: two jobs with the same
+    artwork name share one candidate directory, and a second run continues the
+    numbering (documented behaviour, deliberately kept -- and the naming stays
+    ``candidate_%02d.svg`` by sweep index, never renumbered to dodge a
+    collision).  The consequence is that a rerun with a SMALLER sweep (lower
+    cap, fewer presets, one speckle value) leaves the previous run's
+    higher-numbered candidates on disk, where the comparison stage used to
+    grade them as if this run had produced them -- with the old sweep's
+    parameters at best, or none at all.
+
+    ``compare_candidates.py`` no longer trusts the directory for that: it grades
+    exactly the candidate list in ``sweep.json``.  THIS cleanup is the other
+    half -- hygiene, so the directory matches the record for a human looking at
+    the tree.  The RECORD is authoritative; if the two ever disagree (a crash
+    between the removals and the write, a hand-placed file), what gets graded is
+    still what ``sweep.json`` lists, and anything else is reported as stale
+    rather than graded.
+
+    ``keep_files`` is derived from the same records the manifest is built from,
+    so the two mechanisms cannot disagree about what this sweep produced.
+
+    Only files matching ``candidate_\\d+\\.svg`` directly inside ``out_dir`` are
+    candidates for removal: never a directory, never ``sweep.json``, never the
+    per-candidate checksum sidecars (``candidate_NN.sha256.json`` -- a different
+    suffix, so the pattern cannot reach them), never ``.variants/`` or
+    ``.palette/``, and nothing nested.  Idempotent: a rerun that produces the
+    same set removes nothing.
+
+    Returns the sorted list of names actually removed (empty when there was
+    nothing to do).
+    """
+    keep = set(keep_files)
+    removed = []
+    try:
+        names = os.listdir(out_dir)
+    except OSError:
+        return removed
+    for name in names:
+        if not re.fullmatch(r"candidate_\d+\.svg", name) or name in keep:
+            continue
+        path = os.path.join(out_dir, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            os.unlink(path)
+        except OSError:
+            continue
+        removed.append(name)
+    return sorted(removed)
+
+
 def _sweep(prepped_png, spec, sweep, out_dir, workers=None):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -572,6 +644,23 @@ def _sweep(prepped_png, spec, sweep, out_dir, workers=None):
                  record["hierarchical"], record.get("variant", "source"),
                  bool(record["use_palette"]), status))
 
+    # STALE CANDIDATE CLEANUP -- the other half of the ownership fix (see
+    # prune_stale_candidates and compare_candidates.load_candidates).  The keep
+    # set is the files THIS sweep produced, derived from the same `records` the
+    # manifest below is built from, so cleanup and the graded set cannot
+    # disagree about what this run owns.  A candidate whose trace ERRORED
+    # produced no file, so a leftover with that name is not this run's output
+    # either: it goes too, and the record still lists the name, so the
+    # comparison reports it as an error instead of grading stale bytes under a
+    # fresh sweep entry.  Only after the traces have all finished, and it can
+    # never touch sweep.json, the checksum sidecars, .variants/ or .palette/.
+    produced = [record["file"] for record in records
+                if not record.get("error")]
+    removed = prune_stale_candidates(out_dir, produced)
+    if removed:
+        print("trace_sweep: removed %d stale candidate(s) this sweep did not "
+              "produce: %s" % (len(removed), ", ".join(removed)))
+
     sweep_payload = {
         "tool": "trace_sweep.py",
         "generated": _now(),
@@ -592,6 +681,10 @@ def _sweep(prepped_png, spec, sweep, out_dir, workers=None):
         "truncated": {"selected": len(selected),
                       "total_available": len(candidates),
                       "max_candidates": max_candidates},
+        # Named, so the removal is not a silent side effect.  The graded set is
+        # still `candidates` below -- this records what was cleared away and was
+        # NOT part of this run.
+        "stale_removed": removed,
         "candidates": records,
     }
     fc.write_json(os.path.join(out_dir, "sweep.json"), sweep_payload)

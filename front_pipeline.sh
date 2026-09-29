@@ -48,7 +48,15 @@ FIX_PREP=0
 LOOP=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --sweep)  SWEEP="$2"; shift 2 ;;
+    # An option that takes a value must verify it exists before reading "$2":
+    # under `set -u` a trailing `--sweep` dereferenced an unset $2 and died with
+    # a bare "$2: unbound variable" instead of a usage error.
+    --sweep)
+      if [ $# -lt 2 ]; then
+        echo "--sweep needs a path argument" >&2
+        usage
+      fi
+      SWEEP="$2"; shift 2 ;;
     --sweep=*) SWEEP="${1#--sweep=}"; shift ;;
     --skip-prep) SKIP_PREP=1; shift ;;
     --fix) FIX_PREP=1; shift ;;
@@ -155,9 +163,12 @@ fi
 TRACED="$PROJECT/02_traced/$STEM"
 echo
 echo "--- stage 2: trace sweep ---"
-SWEEP_ARG=""
-[ -n "$SWEEP" ] && SWEEP_ARG="--sweep $SWEEP"
-"$PY" "$PROJECT/scripts/trace_sweep.py" "$PREPPED" "$SPEC" $SWEEP_ARG \
+# Pass --sweep as a real argv pair, never as a "$SWEEP_ARG" string: an unquoted
+# expansion word-splits, so a sweep path containing a space would reach
+# trace_sweep.py as two arguments (and any glob metacharacter would expand).
+SWEEP_ARGV=()
+[ -n "$SWEEP" ] && SWEEP_ARGV=(--sweep "$SWEEP")
+"$PY" "$PROJECT/scripts/trace_sweep.py" "$PREPPED" "$SPEC" "${SWEEP_ARGV[@]}" \
     --out-dir "$TRACED"
 CODE_TRACE=$?
 if [ "$CODE_TRACE" -eq 3 ]; then

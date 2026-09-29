@@ -23,6 +23,20 @@ then lowest artwork MAE" -- the middle term is the exception described above,
 and the table footer states the same ordering.  Do not describe this as a
 gates-only sort: see ``references/passed-is-not-faithful.md``.
 
+WHAT IS GRADED IS THE SWEEP'S OWN RECORD, NOT THE DIRECTORY
+-----------------------------------------------------------
+``02_traced/<stem>`` is shared per stem and persists across runs, so a rerun
+with a smaller cap (or a different preset/speckle set) leaves the previous
+run's higher-numbered ``candidate_NN.svg`` files on disk.  Grading a directory
+glob therefore graded files this sweep never produced.  The graded set is now
+exactly the candidate list in ``sweep.json`` (see ``load_candidates``);
+anything else matching ``candidate_\\d+\\.svg`` is reported as a NON-graded
+"stale" bucket in both the JSON (``stale_candidates``) and the markdown, and is
+never rendered, measured or counted.  ``trace_sweep.py`` also deletes the
+candidates it did not write, so the directory normally agrees -- but the record
+is the authority when the two ever disagree.  When ``sweep.json`` is absent or
+unreadable the old directory glob is still used (documented legacy path).
+
 When a source raster can be resolved (from sweep.json's ``input.file`` or the
 ``--source`` flag), each candidate is ALSO rendered back to a raster with
 Inkscape and diffed against the source, producing a pixel-fidelity metric
@@ -90,8 +104,40 @@ def _now():
 
 
 def load_candidates(traced_dir):
-    """Return (candidates, sweep_payload).  candidates is a list of
-    {file, sweep} where sweep carries the params that produced the file."""
+    """Return (candidates, sweep_payload, stale, graded_source).
+
+    ``candidates`` is the list of ``{file, sweep}`` entries this comparison is
+    allowed to grade; ``sweep`` carries the params that produced the file.
+    ``stale`` is the list of on-disk ``candidate_\\d+\\.svg`` names the sweep
+    record does NOT list -- they are reported and NEVER graded.  ``graded_source``
+    is ``"sweep.json"`` or ``"glob"``, so a reader can tell which rule applied.
+
+    WHY the record is the authority and not the directory
+    ----------------------------------------------------
+    ``02_traced/<stem>`` is per-STEM and persistent (documented behaviour, kept
+    deliberately): a second job with the same artwork name continues the same
+    candidate numbering.  So when a rerun sweeps with a SMALLER cap, a different
+    preset set or a different speckle axis, the earlier run's higher-numbered
+    ``candidate_NN.svg`` files are still on disk.  Globbing the directory graded
+    them as if THIS sweep had produced them -- with the old sweep's parameters
+    (or none at all, when sweep.json had been replaced by a smaller record).
+    That is a silent wrong answer, not a formatting quirk.
+
+    ``trace_sweep.py`` writes ``sweep.json`` with one entry per candidate it
+    traced, so that list is the graded set.  Any ``candidate_\\d+\\.svg`` on disk
+    that the record does not name is reported separately (``stale``) and is not
+    graded, not measured and not counted in ``candidate_count``.
+
+    A name the record DOES list but that is missing from disk is still graded --
+    its layers report an error, which is the honest reading of "the record says
+    this was written and it is not there".  Never dropped silently.
+
+    LEGACY FALLBACK (documented, kept so an old traced dir still compares):
+    when ``sweep.json`` is absent, unreadable, or carries no ``candidates``
+    list, the graded set falls back to today's directory glob of
+    ``candidate_\\d+\\.svg`` with empty sweep params, and ``stale`` is empty --
+    with no record there is nothing to call stale.
+    """
     sweep_payload = None
     sweep_path = os.path.join(traced_dir, "sweep.json")
     if os.path.exists(sweep_path):
@@ -100,17 +146,36 @@ def load_candidates(traced_dir):
         except Exception:  # noqa: BLE001
             sweep_payload = None
 
-    sweep_by_file = {}
-    if sweep_payload and isinstance(sweep_payload.get("candidates"), list):
-        for entry in sweep_payload["candidates"]:
-            sweep_by_file[entry.get("file")] = entry
-
-    files = sorted(
+    on_disk = sorted(
         f for f in os.listdir(traced_dir)
         if re.fullmatch(r"candidate_\d+\.svg", f))
-    candidates = [{"file": f, "sweep": sweep_by_file.get(f, {})}
-                  for f in files]
-    return candidates, sweep_payload
+
+    recorded = None
+    if isinstance(sweep_payload, dict) and \
+            isinstance(sweep_payload.get("candidates"), list):
+        recorded = []
+        seen = set()
+        for entry in sweep_payload["candidates"]:
+            name = (entry or {}).get("file") if isinstance(entry, dict) else None
+            # Only real candidate filenames can come back from here: a record
+            # that names something else is not a candidate and must not become
+            # a graded set member via a path traversal.
+            if not isinstance(name, str) or not re.fullmatch(
+                    r"candidate_\d+\.svg", name):
+                continue
+            if name in seen:
+                continue
+            seen.add(name)
+            recorded.append({"file": name, "sweep": entry})
+
+    if recorded is None:
+        return ([{"file": f, "sweep": {}} for f in on_disk],
+                sweep_payload, [], "glob")
+
+    recorded.sort(key=lambda cand: cand["file"])
+    recorded_names = {cand["file"] for cand in recorded}
+    stale = [f for f in on_disk if f not in recorded_names]
+    return recorded, sweep_payload, stale, "sweep.json"
 
 
 def _findings_by_layer(hard, advisory):
@@ -395,12 +460,21 @@ def _fidelity_cell(fid):
     return "%s / %s" % (all_s, art_s)
 
 
-def _build_markdown(traced_dir, spec_path, candidates, layers):
+def _build_markdown(traced_dir, spec_path, candidates, layers, stale=None,
+                    graded_source="sweep.json"):
     lines = []
     lines.append("# Candidate comparison: %s" % os.path.basename(traced_dir))
     lines.append("")
     lines.append("- spec: `%s`" % spec_path)
     lines.append("- candidates: %d" % len(candidates))
+    lines.append("- graded set: %s" % (
+        "`sweep.json` (the candidates this sweep recorded)"
+        if graded_source == "sweep.json"
+        else "directory glob of `candidate_*.svg` -- LEGACY: no usable "
+             "sweep.json record, so on-disk files are graded as-is"))
+    if stale:
+        lines.append("- not graded (stale, not in the sweep record): %d"
+                     % len(stale))
     lines.append("- layer A (source validation): %s"
                  % ("available" if layers["a"] else "NOT AVAILABLE"))
     lines.append("- layer B (render preflight): %s"
@@ -465,6 +539,36 @@ def _build_markdown(traced_dir, spec_path, candidates, layers):
                             if fid["mae_art"] is not None else "-",
                             fid["p95"], fid["within10"] * 100))
 
+    # The stale bucket.  A rerun with a smaller sweep leaves the previous
+    # run's higher-numbered candidates on disk, and they must never read as
+    # though this sweep produced them -- so they are named here, with sizes,
+    # and kept out of every count and every metric above.  This is the
+    # markdown half of the same bucket the JSON carries as
+    # "stale_candidates"; neither is a gate, they are a statement of what was
+    # NOT looked at.
+    if stale:
+        lines.append("")
+        lines.append("## Not graded (stale: on disk, not in the sweep record)")
+        lines.append("")
+        lines.append("%s is the authority for what this sweep produced. These "
+                     "files exist in the traced directory but the record does "
+                     "not name them -- a rerun with a smaller cap, a different "
+                     "preset set or a different speckle axis leaves them behind, "
+                     "because `02_traced/<stem>` is shared per stem and persists "
+                     "across runs. They were NOT rendered, measured or gated "
+                     "here." % ("`sweep.json`" if graded_source == "sweep.json"
+                                else "the directory listing"))
+        lines.append("")
+        lines.append("| file | bytes |")
+        lines.append("|---|---|")
+        for name in stale:
+            path = os.path.join(traced_dir, name)
+            size = os.path.getsize(path) if os.path.exists(path) else "-"
+            lines.append("| %s | %s |" % (name, size))
+        lines.append("")
+        lines.append("Run the sweep again (same or larger cap) to rebuild them, "
+                     "or delete them; they will never be graded as-is.")
+
     # findings shared by every candidate (usually the uniform ones, e.g. a
     # dimension mismatch inherited from the tracer)
     lines.append("")
@@ -515,7 +619,7 @@ def _compare(traced_dir, spec_path, out_dir=None, source_flag=None, workers=None
     out_dir = out_dir or os.path.join(ROOT, "04_validated")
     os.makedirs(out_dir, exist_ok=True)
 
-    candidates, sweep_payload = load_candidates(traced_dir)
+    candidates, sweep_payload, stale, graded_source = load_candidates(traced_dir)
 
     layers = {"a": layer_a_available, "b": layer_b_available}
     if not layer_a_available:
@@ -525,14 +629,32 @@ def _compare(traced_dir, spec_path, out_dir=None, source_flag=None, workers=None
         print("compare_candidates: WARNING: Layer B unavailable: %s"
               % layer_b_error)
 
+    if graded_source == "glob":
+        print("compare_candidates: no usable sweep.json record -- grading "
+              "every candidate_*.svg on disk (legacy fallback)")
+    if stale:
+        # Named, counted, and never graded: the sweep record is the authority
+        # for what this run produced (see load_candidates).
+        print("compare_candidates: %d stale candidate(s) on disk are NOT in "
+              "the sweep record and are NOT graded: %s"
+              % (len(stale), ", ".join(stale)))
+
     if not candidates:
-        message = "no candidates found in %s" % traced_dir
+        if stale:
+            message = ("sweep record lists no candidates in %s; %d stale "
+                       "candidate(s) on disk are not graded (%s)"
+                       % (traced_dir, len(stale), ", ".join(stale)))
+        else:
+            message = "no candidates found in %s" % traced_dir
         payload = {
             "tool": "compare_candidates.py",
             "generated": _now(),
             "traced_dir": traced_dir,
             "spec": spec_path,
             "candidate_count": 0,
+            "graded_set_source": graded_source,
+            "stale_candidates": stale,
+            "stale_candidate_count": len(stale),
             "note": message,
             "layers_available": layers,
             "candidates": [],
@@ -541,8 +663,12 @@ def _compare(traced_dir, spec_path, out_dir=None, source_flag=None, workers=None
                       payload)
         with open(os.path.join(out_dir, "%s.comparison.md" % stem), "w",
                   encoding="utf-8") as handle:
-            handle.write("# Candidate comparison: %s\n\n%s\n"
-                         % (stem, message))
+            handle.write("# Candidate comparison: %s\n\n%s\n" % (stem, message))
+            if stale:
+                handle.write("\n## Not graded (stale: on disk, not in the sweep "
+                             "record)\n\n| file |\n|---|\n")
+                for name in stale:
+                    handle.write("| %s |\n" % name)
         print("compare_candidates: %s (wrote empty comparison)" % message)
         return 0
 
@@ -626,8 +752,9 @@ def _compare(traced_dir, spec_path, out_dir=None, source_flag=None, workers=None
     # PHASE 2 / #triage-events-record-shown -- this is the point where the
     # ordered list becomes what the human is actually shown, so it is where each
     # candidate's exposure is logged: one "shown" event per candidate, carrying
-    # its 0-based POSITION in this order.  Later phases learn a preference from
-    # what was shown and what the human then picked.
+    # its 1-based POSITION in this order (first candidate = 1, matching
+    # triage_events.record_shown and the comparison display loop).  Later phases
+    # learn a preference from what was shown and what the human then picked.
     #
     # The log is job-independent (PIPELINE_LEARNING_DIR, default
     # 06_run/_learning/) precisely because this job's 06_run/<stem>/ is swept on
@@ -656,6 +783,9 @@ def _compare(traced_dir, spec_path, out_dir=None, source_flag=None, workers=None
         "traced_dir": traced_dir,
         "spec": spec_path,
         "candidate_count": len(records),
+        "graded_set_source": graded_source,
+        "stale_candidates": stale,
+        "stale_candidate_count": len(stale),
         "layers_available": layers,
         "common_findings": common_rules,
         "sort": ("fewest hard gates failed, then whether the artwork survived "
@@ -667,7 +797,8 @@ def _compare(traced_dir, spec_path, out_dir=None, source_flag=None, workers=None
     }
     fc.write_json(os.path.join(out_dir, "%s.comparison.json" % stem), payload)
 
-    md = _build_markdown(traced_dir, spec_path, records, layers)
+    md = _build_markdown(traced_dir, spec_path, records, layers, stale=stale,
+                         graded_source=graded_source)
     md += "\n\n## Common to all candidates\n\n%s\n" % (
         ", ".join(common_rules) if common_rules else "(none)")
     with open(os.path.join(out_dir, "%s.comparison.md" % stem), "w",

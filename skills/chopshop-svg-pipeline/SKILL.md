@@ -46,6 +46,10 @@ Stages (each script is also runnable alone):
 3. `scripts/compare_candidates.py <traced_dir> <spec>` → `04_validated/<stem>.comparison.md` + `.json`
 4. human reads `.comparison.md`, picks a candidate, runs `./pipeline.sh` on it.
 
+`--sweep` takes a value as real argv: a missing value is a usage error, not a
+crash inside `set -u` (`$2: unbound variable`), so a typo in a loop script gives
+you a usage line instead of a shell error that looks like a pipeline bug.
+
 ### Semi-interactive loop (--loop)
 
 `front_pipeline.sh --loop` appends a pick loop: after compare it hands off to
@@ -505,6 +509,44 @@ post-processing step: it snaps every fill/stroke to the spec palette, giving
 3-6 colours.  `prep_colors` (pngquant) and `color_precision` alone are NOT
 sufficient on photographic input.
 
+### Sweep ownership: the record outranks the directory
+
+`02_traced/<stem>/` is per-stem and persists across runs (a second job with the
+same artwork name continues the same candidate numbering). So a rerun with a
+**smaller cap, a different preset set, or a different speckle axis** leaves the
+previous run's higher-numbered `candidate_NN.svg` files on disk.
+
+**The graded set is `sweep.json`'s `candidates` list, not a directory glob.**
+`compare_candidates.py` grades exactly the candidates the record names;
+`graded_set_source` says `sweep.json` or `glob`, so a reader can tell which rule
+applied. Anything else matching `candidate_\d+\.svg` on disk is a named
+**NON-GRADED stale bucket** — `stale_candidates` / `stale_candidate_count` in
+the JSON, a *Not graded (stale)* section in the markdown — and is never
+rendered, measured or counted in `candidate_count`. Globbing used to grade those
+files as if this sweep had produced them, with the old sweep's parameters at
+best or none at all: a silent wrong answer, not a formatting quirk.
+
+Globbed candidates were also the previous run's *measurements*, so a table built
+from a glob can mix two sweeps' parameters in one ranking. A name the record
+lists but that is missing from disk is still graded, and reports an error — the
+honest reading of "the record says this was written and it is not there".
+
+`sweep.json` absent, unreadable, or without a `candidates` list → the **legacy
+glob fallback** (documented, kept so an old traced dir still compares), with
+empty sweep params and an empty stale bucket: with no record there is nothing to
+call stale.
+
+`trace_sweep.py` is the other half: after a successful sweep it prunes the
+`candidate_\d+\.svg` files **it did not write** and records them in
+`sweep.json` under `stale_removed`, so the directory matches the record. It
+never touches `sweep.json`, the per-candidate checksum sidecars
+(`candidate_NN.sha256.json` — a different suffix, so the pattern cannot reach
+them), `.variants/` or `.palette/`, and it is idempotent. A candidate whose
+trace ERRORED produced no file, so a leftover with that name goes too. Cleanup
+is hygiene, not authority: if the directory and the record ever disagree (a
+crash between the removals and the write, a hand-placed file), **what gets
+graded is still the record** and everything else is reported as stale.
+
 ### Round-robin truncation (fixed)
 
 `build_candidates` now round-robins across per-speckle groups (zip_longest)
@@ -544,6 +586,16 @@ Two concurrency pitfalls, both fixed in `front_common`/`compare_candidates`:
   candidate a sub-workdir `<out>/<stem>.work/<candidate>/`.
 
 Locked in by `test_parallel_matches_sequential` in both test files.
+
+**Reproducibility must not depend on the ImageMagick version.** The old
+`-define png:exclude-chunk=date,time` only worked on IM7, so on IM 6.x two runs
+of the same preset a second apart differed by the `date:create` /
+`date:modify` / `date:timestamp` tEXt chunks and
+`test_parallel_matches_sequential` failed once it straddled a second boundary.
+The fix is a documented post-pass, `im_filters.strip_png_time_chunks`, that
+drops exactly those three chunks from each non-`identity` preset PNG. `-strip`
+is deliberately **not** used: it also removes profiles, which matters for print
+colour — the point is to remove the clock, not the colour management.
 
 ### Optional generation stacks (not in this repo)
 
@@ -611,7 +663,13 @@ knowing when a design is densely covered.
   `stats["static"]["path_nodes_total"/"path_nodes_max"]`. If a render tool is
   missing, `rendered_ink_colors` is None and a MISSING_TOOL finding marks Layer
   B "not run".
-- Sort candidates by (hard, advisory) ascending ONLY — never rank or judge.
+- Sort candidates by `(hard, fidelity_verdict rank, advisory, mae_art)` —
+  ascending, never rank or judge. The middle term is the one exception to
+  "gates only": a candidate that discarded the artwork must not sort level with
+  one that reproduced it (see `references/passed-is-not-faithful.md`). Any prose
+  describing the ordering has to describe *this* key — a footer still saying
+  "sorted on gates and nothing more" is how the missing dimension stays
+  invisible.
 - The full pipeline (`pipeline.sh`) is run by the human on the CHOSEN candidate;
   `front_pipeline.sh` never calls it.
 - rembg may be installed module-only (`pip install rembg`, no `[cli]` extra): no
@@ -674,17 +732,59 @@ test-side bug, and "fixing" the script to match it ships the bug.
    namespaces freely.
 4. **Build one style context** for the document (inline `style=`, `<style>`
    blocks, presentation attributes) and query it for every property.
-5. **Run the rules in a fixed order** — raster embeds, colour budget, stroke
-   widths, path geometry — each wrapped so a crash becomes a failure line
+5. **Run the rules in a fixed order** — raster embeds, gradients, colour budget,
+   stroke widths, path geometry — each wrapped so a crash becomes a failure line
    instead of aborting the run, and run **all** of them: report every failure in
-   one pass so the user fixes a batch, not one item per invocation.
+   one pass so the user fixes a batch, not one item per invocation. "Raster
+   embeds" means the whole family (see the invariant below), not just `<image>`,
+   and the gradient rule is a hard gate in its own right rather than a Layer B
+   observation.
 6. **Report and exit.** One line per failure, then exit 1 if any, 0 if none.
    Reserve a distinct code (2) for bad usage so a pipeline can tell "file is
    bad" from "you called me wrong".
 7. **Probe adversarially** before declaring done: `scripts/svg_edge_case_probe.py`
    runs a batch of degenerate documents (moveto-only paths, `1em` widths,
    negative widths, nested `<svg>`, BOM, XXE, at-rules) against the validator
-   and flags any case whose outcome is not what you expected.
+   and flags any case whose outcome is not what you expected. It writes each
+   case as a real file: fragments get an `<svg>` root, a case that is
+   deliberately a whole document (root `svg`/`html`) is written unwrapped, and a
+   leading BOM goes before the root. **A probe that cannot run its cases cannot
+   tell a validator change from its own malformation** — when every case reports
+   the same parse error, fix the fixture generator before reading anything into
+   the result. Add a case for each new rule, and assert the *rule tag*, not just
+   a non-zero exit.
+
+### Back-half artefact naming (`pipeline.sh`)
+
+The flat canonical names stay, and two attributable families are published
+alongside them. All three are written by the same run; nothing was renamed.
+
+| name | what it is |
+|---|---|
+| `05_final/<candidate>.{manifest.json,proof.png,print.pdf,layer_b.txt}` | canonical flat name. The runner and the studio are built on it. |
+| `05_final/<artwork>/<candidate>.{manifest.json,proof.png,print.pdf,layer_b.txt}` | **artwork-scoped** — the same artefact, under the artwork's own stem, so it can never collide. |
+| `05_final/<artwork>.<candidate>.<RUN_ID>.{manifest.json,proof.png,print.pdf}` | run-unique copy, carrying **both** stems so it is attributable. `RUN_ID` = timestamp + 4 random bytes. |
+| `04_validated/<candidate>.layer_a.txt` | canonical flat Layer A log. |
+| `04_validated/<artwork>.<candidate>.layer_a.txt` | artwork-scoped Layer A log (a sibling in `04_validated/`, not a subdirectory — the name stays artwork-stem-prefixed, which is what the orphan classifier keys on). |
+
+**Why the flat name is not enough.** `<candidate>` is the INPUT FILE's stem, and
+the back half is normally run per candidate as `02_traced/<artwork>/candidate_04.svg`
+— so the stem is `candidate_04`, the same string for every artwork that ever
+traced one. `05_final/candidate_04.manifest.json` is therefore shared state: a
+later artwork's run record could read an earlier artwork's manifest, proof and
+human pick. The artwork is named by the containing directory; a path handed
+straight to the script (`00_source/art.svg`) names its own artwork, so a
+dir-less path falls back to the file stem.
+
+`run_record.py` **prefers the artwork-scoped artefact** and, when it falls back
+to the flat one, records `"path_scope": "flat-shared"` on that artefact plus an
+`anomalies` note naming the shared path. Scope values are `artwork`,
+`flat-shared` and `absent`. The fallback is a *reading*, not a failure: a legacy
+flat artefact is readable data, so it lands in `anomalies` rather than
+`missing_links`. Layer B's scratch dir is per (artwork, candidate) —
+`.preflight-work/<artwork>/<candidate>/` — because the workdir is unlinked and
+refilled on every run, so two runs sharing one directory race on
+`flattened.pdf` and on the stale-separation cleanup.
 
 ### Invariants
 
@@ -722,9 +822,47 @@ test-side bug, and "fixing" the script to match it ships the bug.
   A validator that passes what it cannot resolve is worse than no validator.
 - **Fail loud on artwork that renders nothing**: a `<path>` with missing, blank
   or moveto-only `d` is zero-area by definition → report it.
+- **Resolve paint through the cascade**: an `!important` inline declaration > an
+  `!important` stylesheet rule (by specificity, later wins on a tie) > an
+  ordinary inline declaration > an ordinary stylesheet rule > the presentation
+  attribute. Reading `element.get('fill')` misses every `<style>`-driven file,
+  and *stripping* `!important` makes the inline declaration win every time.
+- **The raster rule is a family, not `<image>`.** An `<image>` anywhere
+  (including nested in a `<pattern>`), an `<feImage>` with a `data:`/`file:`/
+  external href, a `<foreignObject>`, an `<image>`/`<use>` whose href is a
+  non-fragment document or a `data:` URI, and a `url(data:image/...)` in a
+  `<style>` block or an inline style all count, one rule and one message.
+  `<image>` alone let three ways of getting a bitmap in through with zero
+  findings.
+- **A paint-server reference is not a colour, and with gradients banned it is a
+  failure** (`GRADIENT_NOT_ALLOWED`): a declared
+  `<linearGradient>`/`<radialGradient>` OR any `url(...)` in `fill`, `stroke`,
+  `stop-color`, `flood-color` or `lighting-color`, whether it arrives as an
+  attribute, an inline style or a `<style>` rule. Report both halves — the
+  declarations and the paint sites — and report a reference that resolves to
+  nothing, or to a non-gradient paint server, as exactly that. With
+  `allow_gradients: true` nothing fails and the `<stop>` colours are counted.
 - **Count colours after normalisation** to lowercase `#rrggbb`; drop `none`,
-  `transparent`, `currentColor`, `url(#...)` and `var(...)`; keep unrecognised
-  keywords in the count (they still occupy a palette slot).
+  `transparent` and `var(...)`; keep unrecognised keywords in the count (they
+  still occupy a palette slot). But `currentColor` is **not** dropped — it
+  resolves from the inherited `color` (initial black) and is counted — and a
+  shape whose cascade never sets `fill` contributes the implicit black. Counting
+  declarations rather than final pixels means a value a later rule overrides
+  still occupies a slot.
+- **Paint that cannot ink is not measured.** `display:none`, `opacity:0`,
+  `visibility:hidden` (per element, so a descendant may paint again),
+  `stroke-opacity:0`, and content inside `<clipPath>`/`<filter>`/`<style>`/
+  `<metadata>` are excluded from the colour budget AND from the stroke-width
+  check. Definition content (`<defs>`, `<symbol>`, `<pattern>`, `<mask>`,
+  `<marker>`) is checked only when something references it; unreferenced, it is
+  reported once as `UNCHECKED_DEFINITION` rather than failed, and the report
+  says coverage is partial.
+- **An advisory goes to `notes`, never to `failures`.** `EFFECT_REFERENCE`,
+  `TRANSLUCENT_PAINT` and `UNCHECKED_DEFINITION` describe things a declaration
+  reader cannot measure (a filter's blur, a tint's effect on the rendered ink
+  count). This is not cosmetic: `preflight.classify()` fails **SAFE TO HARD** for
+  a rule tag it does not know, so an advisory routed through `failures` becomes a
+  silent hard gate in Layer B.
 - **Report the element, the value, the source and the limit** in one line:
   `Path id='rule' has stroke-width 0.5pt, below minimum 1.5pt
   (stroke-width='0.5pt' from css)`. Identify elements by `id` first, then
@@ -767,12 +905,19 @@ declared → 115 rendered, 33% of the sheet). Render to PNG on white with
 `inkscape in.svg --export-type=png --export-dpi=300 --export-background=#ffffff
 --export-background-opacity=255`.
 - **Ink count and continuous tone are two different failures.** Comparing an ink
-count against a spot-colour budget is the wrong model for a gradient: at
-Euclidean tolerance 20 a whole gradient ramp collapses to ~7 "inks" and would
-*wrongly pass* a 6-colour limit. Detect ramps separately — a merged cluster
-built from many near-neighbour colours (≥6) covering real area is continuous
-tone, i.e. a gradient or photograph that needs halftone screening. Give it an
-explicit opt-out (`allow_gradients`) for CMYK process work.
+  count against a spot-colour budget is the wrong model for a gradient: at
+  Euclidean tolerance 20 a whole gradient ramp collapses to ~7 "inks" and would
+  *wrongly pass* a 6-colour limit. Detect ramps separately — a merged cluster
+  built from many near-neighbour colours (≥6) covering real area is continuous
+  tone, i.e. a gradient or photograph that needs halftone screening. Give it an
+  explicit opt-out (`allow_gradients`) for CMYK process work.
+- **The `allow_gradients` opt-out belongs to the SOURCE gate, and Layer B still
+  supplies the evidence.** `geometry.allow_gradients: false` is enforced in
+  Layer A as `GRADIENT_NOT_ALLOWED` (a declared gradient OR any paint-server
+  reference — see the paint reference); the rendered ink count is how you show
+  *why* it matters (5 declared → 115 rendered, 33% of the sheet). Layer B's tone
+  detector and Layer A's declaration check are the same ban seen from two sides,
+  and a spec with `validation.run_preflight: false` must not lose it.
 - **Rendered colour counts need de-noising, in two stages.** An *area
 threshold* (a colour must cover ≥0.05% of the sheet to count) removes most
 antialias fringe; a *Euclidean merge in sRGB* (tolerance ~20 of 441) collapses
@@ -894,7 +1039,29 @@ source inspection would catch.
   `validate_svg.main` exits 1 on *any* entry in `failures`, so a non-fatal
   observation placed there silently converts a PASS into a FAIL. When adding a
   finding that cannot flip the verdict, route it to `notes` and let
-  `preflight.classify_findings` decide severity.
+  `preflight.classify_findings` decide severity. The same mistake is worse than
+  it looks downstream: `preflight.classify()` fails **SAFE TO HARD** for a rule
+  tag it does not recognise, so an advisory that reaches Layer B as a failure
+  becomes a hard gate on artwork that is fine. `EFFECT_REFERENCE`,
+  `TRANSLUCENT_PAINT` and `UNCHECKED_DEFINITION` exist as notes for exactly this
+  reason, and the new-tag counts are recorded in `stats`
+  (`effect_references`, `translucent_elements`,
+  `unchecked_definition_elements`, `gradient_definitions`,
+  `gradient_paint_references`, `implicit_fill_elements`,
+  `currentcolor_elements`, `hidden_elements`) so the manifest shows what was
+  there even when nothing fails.
+- **A rule tag is an interface, not a label.** `GRADIENT_NOT_ALLOWED` and
+  `EFFECT_REFERENCE` are literally named in the operator front end's help text
+  and its proof-page checklist, and the test suite asserts on `[RULE_TAG]` text
+  in stdout. Renaming one to read better silently breaks a shipped UI string and
+  every test that pins the contract — add a tag, do not rename one.
+- **A new Layer A rule has to be declared to the other layer.** `preflight.py`
+  carries `LAYER_A_RULES`, the set of rule tags that are *source-level*; the
+  unified manifest and `comparison.json`'s `layer_a`/`layer_b` split are built
+  from it. A source rule missing from that set still fails the job (the
+  classifier fails safe to HARD on an unknown tag) but is labelled
+  `render_preflight`, so a gradient refusal reads as a render finding. Severity
+  can be right while the layer column lies — add the tag in both places.
 - **Two "optional-looking" apt packages are required and fail tests when
   absent: `poppler-utils` and `colord-data`.** The preflight shells out to
   `pdfimages`/`pdfinfo` (poppler-utils) for placed-bitmap resolution and
@@ -1073,7 +1240,10 @@ source inspection would catch.
 ### References
 
 - `references/svg-paint-and-units.md` — colour normalisation decision table,
-  unit conversions, cascade resolution order, at-rule handling.
+  what counts as a colour (implicit black, `currentColor`, gradient `<stop>`s),
+  paint-server references and the `GRADIENT_NOT_ALLOWED` gate, unit conversions
+  and the document scale, the `!important`-ranked cascade, at-rule handling, and
+  why the advisories live in notes.
 - `references/path-geometry-svgpathtools.md` — svgpathtools recipes for
   closure, emptiness, length and area, with defensive fallbacks.
 - `references/validator-testing.md` — the pytest suite shape: parametrised unit
@@ -1092,4 +1262,10 @@ source inspection would catch.
   ladder, the file proxy, the disk gate, in-memory state, and the optional Jev
   add-on's 503-not-404 rule.
 - `scripts/svg_edge_case_probe.py` — run a validator against a batch of
-  degenerate SVGs and flag unexpected outcomes.
+  degenerate SVGs and flag unexpected outcomes. Wraps each case in a real `<svg>`
+  root (unless the case is deliberately a whole document), so a case's outcome is
+  the validator's answer and not the probe's own malformation; `fail:RULE`,
+  `pass`, `any` and `any-not:TEXT` expectations.
+- `../docs/pipeline-schemas.md` — the JSON shapes of the two machine-readable
+  artefacts: `04_validated/<stem>.comparison.json` and
+  `06_run/<stem>.run.json`, key by key, with what each value means.

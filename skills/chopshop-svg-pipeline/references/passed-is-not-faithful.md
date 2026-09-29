@@ -61,9 +61,16 @@ rather than an exact match.
 | `colour_dropped` | rendered < declared × 0.5 | 2 |
 | `artwork_lost` | `mae_art` > 8.0 | 3 |
 
-`mae_art` unmeasured (no source resolved) returns **neither** pass nor failure:
-it must not read as `artwork_lost`. An absent measurement is not evidence the
-artwork survived, and it is not evidence it was lost.
+`mae_art` unmeasured (no source resolved) must **not** read as `artwork_lost`:
+an absent measurement is not evidence the artwork survived, and it is not
+evidence it was lost. Note what the code actually does with that input, though —
+with `measured: false` it falls through every branch and returns `faithful` with
+the reason `artwork MAE n/a` (rank 0), so an unmeasured candidate sorts *with* the
+faithful ones rather than being held apart from them. The test in this repo
+(`test_unmeasured_fidelity_is_not_judged_artwork_lost`) pins only the
+"not `artwork_lost`" half. If a distinction between "measured faithful" and "not
+measured" is ever needed, it belongs in the verdict itself — a separate value —
+not in a caller's reading of the reason string.
 
 The checks are evaluated in order, so a candidate that both lost the artwork and
 dropped colours reports `artwork_lost`; the ladder is a precedence order, not a

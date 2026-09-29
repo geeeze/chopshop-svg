@@ -505,3 +505,67 @@ def test_spec_sweep_that_is_not_an_object_is_refused(tmp_path):
     code, _ = _run(tmp_path, png, spec)
 
     assert code == 2
+
+
+# --------------------------------------------------------------------------
+# Sweep ownership of the shared candidate directory
+#
+# 02_traced/<stem> is per-STEM and persists across runs, so a rerun with a
+# SMALLER sweep leaves the previous run's higher-numbered candidates on disk
+# where the comparison stage used to grade them as this run's output.  The
+# unit half of the fix (the cleanup itself) is pinned in
+# tests/test_trace_sweep_ownership.py, which needs no tracer; this is the
+# end-to-end half, against the real tracer.
+# --------------------------------------------------------------------------
+
+def test_smaller_rerun_leaves_only_the_candidates_it_wrote(tmp_path):
+    png = make_two_colour_png(tmp_path / "art.png")
+    wide = make_spec(tmp_path, sweep={"presets": ["bw", "poster"],
+                                      "max_candidates": 6}, name="wide.json")
+    narrow = make_spec(tmp_path, sweep={"presets": ["bw", "poster"],
+                                        "filter_speckle": [2],
+                                        "hierarchical": ["cutout"],
+                                        "max_candidates": 3},
+                       name="narrow.json")
+
+    code, out_dir = _run(tmp_path, png, wide)
+    assert code == 0
+    wide_files = sorted(f for f in os.listdir(out_dir)
+                        if f.endswith(".svg"))
+    assert len(wide_files) == 6, wide_files
+
+    # Same directory on purpose: two jobs with the same artwork name share it.
+    code, _ = _run(tmp_path, png, narrow)
+    assert code == 0
+
+    now = sorted(f for f in os.listdir(out_dir) if f.endswith(".svg"))
+    assert now == ["candidate_01.svg", "candidate_02.svg", "candidate_03.svg"]
+    for gone in ("candidate_04.svg", "candidate_05.svg", "candidate_06.svg"):
+        assert not os.path.exists(os.path.join(out_dir, gone)), gone
+
+    # The record agrees with the directory, and names what it cleared.
+    sweep = json.load(open(os.path.join(out_dir, "sweep.json"),
+                           encoding="utf-8"))
+    assert [c["file"] for c in sweep["candidates"]] == now
+    assert sweep["stale_removed"] == ["candidate_04.svg", "candidate_05.svg",
+                                      "candidate_06.svg"]
+    assert os.path.exists(os.path.join(out_dir, "sweep.json"))
+
+
+def test_rerun_with_the_same_candidates_removes_nothing(tmp_path):
+    """Idempotent end to end: the cleanup must not churn a stable directory."""
+    png = make_two_colour_png(tmp_path / "art.png")
+    spec = make_spec(tmp_path, sweep={"presets": ["bw"], "max_candidates": 3})
+
+    code, out_dir = _run(tmp_path, png, spec)
+    assert code == 0
+    before = sorted(f for f in os.listdir(out_dir) if f.endswith(".svg"))
+    assert before
+
+    code, _ = _run(tmp_path, png, spec)
+    assert code == 0
+    assert sorted(f for f in os.listdir(out_dir)
+                  if f.endswith(".svg")) == before
+    sweep = json.load(open(os.path.join(out_dir, "sweep.json"),
+                           encoding="utf-8"))
+    assert sweep["stale_removed"] == []

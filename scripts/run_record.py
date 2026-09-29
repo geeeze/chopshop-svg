@@ -17,12 +17,32 @@ stem) and writes ``<out-dir>/<stem>.run.json`` stitching, per candidate:
 
 It never picks a winner and never runs the pipeline.  It only reads.
 
+Where the back-half artefacts live (pipeline.sh publishes all of these names,
+additively -- the flat one is what runner.py reads, the others are what make the
+artefact attributable):
+
+    <candidate>.x                         canonical flat name (runner.py reads it)
+    <artwork-stem>/<candidate>.x          artwork-scoped -- preferred here
+    <artwork-stem>.<candidate>.<RUN_ID>.x run-unique copy of one back-half run
+
+The flat name is NOT attributable: it is one file, shared by every artwork that
+ever traced a candidate with that same file stem (``candidate_04``), so a run
+record reading it could be reading a different artwork's manifest, proof and
+human pick.  This script therefore prefers the artwork-scoped name, falls back to
+the flat one only when the scoped one is absent, and when it does, sets
+``"path_scope": "flat-shared"`` on that artefact and records an anomaly note, so a
+shared file is never read as if it were this run's.
+
 Expected human-decision conventions (both optional; flagged as missing links
-when absent):
-  - per-candidate ``05_final/<id>.pick.json``:
+when absent).  The artwork-scoped name is preferred, same reason as above:
+  - per-candidate ``05_final/<artwork-stem>/<id>.pick.json`` (preferred), with a
+    legacy fallback to the shared flat ``05_final/<id>.pick.json`` -- the fallback
+    is read, but marked ``"path_scope": "flat-shared"`` and listed under the
+    candidate's ``anomalies``:
         {"selected": true|false, "label": "production|style_reference|needs_retrace|discard", "reason": "..."}
   - or a run-level ``04_validated/<stem>.decision.json`` mapping id -> the above.
-Expected visual-review convention (optional): ``05_final/<id>.visual_review.md``.
+Expected visual-review convention (optional), same preference order:
+``05_final/<artwork-stem>/<id>.visual_review.md`` then ``05_final/<id>.visual_review.md``.
 
 Usage:
     .venv/bin/python scripts/run_record.py --all                     # every run
@@ -95,6 +115,48 @@ def _stamp(path: Path, found: bool):
     return {"path": str(path), "found": found}
 
 
+# --------------------------------------------------------------------------
+# Artefact resolution: prefer the artwork-scoped name, mark every fallback.
+# --------------------------------------------------------------------------
+
+#: ``path_scope`` values, in preference order.  "artwork" == the name carries the
+#: run's artwork stem and is therefore this run's own artefact; "flat-shared" ==
+#: the name is shared by every artwork with that candidate stem, so it is read
+#: only for continuity with pre-fix runs and must be flagged; "absent" == no file
+#: at either name.
+PATH_SCOPE_ARTWORK = "artwork"
+PATH_SCOPE_FLAT = "flat-shared"
+PATH_SCOPE_ABSENT = "absent"
+
+
+def _choose_artefact(scoped: Path, flat: Path) -> tuple[Path, str]:
+    """Resolve one artefact to (path, path_scope).
+
+    The artwork-scoped name wins; the flat name is a fallback that is reported as
+    "flat-shared" so the caller can record that it is not attributable to this
+    run.  When neither exists the scoped path is returned, so a missing-file
+    message points at the name the pipeline should have written.
+    """
+    if scoped.is_file():
+        return scoped, PATH_SCOPE_ARTWORK
+    if flat.is_file():
+        return flat, PATH_SCOPE_FLAT
+    return scoped, PATH_SCOPE_ABSENT
+
+
+def _artefact_record(path: Path, scope: str, *, hashed: bool = False) -> dict:
+    """``path``/``found`` (plus ``sha256`` for binary artefacts) + provenance scope.
+
+    The extra ``path_scope`` is the additive part of the record shape; everything
+    else matches what this record carried before the artwork-scoping fix.
+    """
+    record = _stamp(path, path.is_file())
+    record["path_scope"] = scope
+    if hashed:
+        record["sha256"] = fc.sha256_file(path) if path.is_file() else None
+    return record
+
+
 def load_prep(stem: str) -> dict:
     path = PREPPED_DIR / f"{stem}.prep.json"
     data = _read_json(path)
@@ -154,17 +216,37 @@ def load_comparison(stem: str) -> dict:
     return record
 
 
-def candidate_back_half(cand_id: str) -> dict:
-    manifest_path = FINAL_DIR / f"{cand_id}.manifest.json"
-    proof_path = FINAL_DIR / f"{cand_id}.proof.png"
-    pdf_path = FINAL_DIR / f"{cand_id}.print.pdf"
-    layer_a_path = VALIDATED_DIR / f"{cand_id}.layer_a.txt"
-    layer_b_path = FINAL_DIR / f"{cand_id}.layer_b.txt"
+def candidate_back_half(cand_id: str, artwork_stem: str) -> dict:
+    """The back-half artefacts for one candidate of one artwork.
 
-    record: dict = {"run": manifest_path.is_file()}
+    ``artwork_stem`` is the RUN's stem (the traced-dir name).  The artwork-scoped
+    name under 05_final/<artwork_stem>/ is the run's own artefact; the flat
+    05_final/<cand_id>.* name is shared by every artwork with that candidate file
+    stem, so it is only a fallback and is always marked as such.
+    """
+    scoped_dir = FINAL_DIR / artwork_stem
+    flat_dir = FINAL_DIR
+    manifest_path, manifest_scope = _choose_artefact(
+        scoped_dir / f"{cand_id}.manifest.json", flat_dir / f"{cand_id}.manifest.json")
+    proof_path, proof_scope = _choose_artefact(
+        scoped_dir / f"{cand_id}.proof.png", flat_dir / f"{cand_id}.proof.png")
+    pdf_path, pdf_scope = _choose_artefact(
+        scoped_dir / f"{cand_id}.print.pdf", flat_dir / f"{cand_id}.print.pdf")
+    layer_b_path, layer_b_scope = _choose_artefact(
+        scoped_dir / f"{cand_id}.layer_b.txt", flat_dir / f"{cand_id}.layer_b.txt")
+    # Layer A's artwork-scoped name is a sibling in 04_validated/, not a subdir:
+    # pipeline.sh writes <artwork-stem>.<candidate-stem>.layer_a.txt there so the
+    # name stays artwork-stem-prefixed (orphan_sweep's classification rule).
+    layer_a_path, layer_a_scope = _choose_artefact(
+        VALIDATED_DIR / f"{artwork_stem}.{cand_id}.layer_a.txt",
+        VALIDATED_DIR / f"{cand_id}.layer_a.txt")
+
+    record: dict = {"run": manifest_path.is_file(),
+                    "cand_id": cand_id, "artwork_stem": artwork_stem}
 
     manifest = _read_json(manifest_path)
     manifest_record = _stamp(manifest_path, manifest is not None)
+    manifest_record["path_scope"] = manifest_scope
     if manifest is not None:
         manifest_record["sha256"] = fc.sha256_file(manifest_path)
         manifest_record["passed"] = manifest.get("passed")
@@ -185,38 +267,51 @@ def candidate_back_half(cand_id: str) -> dict:
         }
 
     record["manifest"] = manifest_record
-    record["proof_png"] = {"path": str(proof_path), "found": proof_path.is_file(),
-                           "sha256": fc.sha256_file(proof_path) if proof_path.is_file() else None}
-    record["print_pdf"] = {"path": str(pdf_path), "found": pdf_path.is_file(),
-                           "sha256": fc.sha256_file(pdf_path) if pdf_path.is_file() else None}
-    record["layer_a_txt"] = {"path": str(layer_a_path), "found": layer_a_path.is_file()}
-    record["layer_b_txt"] = {"path": str(layer_b_path), "found": layer_b_path.is_file()}
+    record["proof_png"] = _artefact_record(proof_path, proof_scope, hashed=True)
+    record["print_pdf"] = _artefact_record(pdf_path, pdf_scope, hashed=True)
+    record["layer_a_txt"] = _artefact_record(layer_a_path, layer_a_scope)
+    record["layer_b_txt"] = _artefact_record(layer_b_path, layer_b_scope)
     return record
 
 
-def candidate_decision(cand_id: str, stem: str) -> dict:
-    per_candidate = FINAL_DIR / f"{cand_id}.pick.json"
-    run_level = VALIDATED_DIR / f"{stem}.decision.json"
+def candidate_decision(cand_id: str, artwork_stem: str) -> dict:
+    """The human's pick for one candidate: scoped, then flat, then run-level."""
+    scoped = FINAL_DIR / artwork_stem / f"{cand_id}.pick.json"
+    flat = FINAL_DIR / f"{cand_id}.pick.json"
+    run_level = VALIDATED_DIR / f"{artwork_stem}.decision.json"
 
-    data = _read_json(per_candidate)
+    data = _read_json(scoped) if scoped.is_file() else None
+    scope = PATH_SCOPE_ARTWORK if data is not None else None
+    path = scoped
     if data is None:
+        data = _read_json(flat)
+        if data is not None:
+            scope, path = PATH_SCOPE_FLAT, flat
+    if data is None:
+        # The run-level decision file is already artwork-keyed, so it is equally
+        # attributable -- it just holds every candidate's pick in one document.
         run_data = _read_json(run_level)
         if isinstance(run_data, dict):
             data = run_data.get(cand_id)
             if isinstance(data, dict):
                 data = dict(data)
+                scope, path = PATH_SCOPE_ARTWORK, run_level
     if data is None:
-        return {"found": False, "path": None}
-    return {"found": True, "path": str(per_candidate if per_candidate.exists()
-                                       else run_level),
+        return {"found": False, "path": None, "path_scope": PATH_SCOPE_ABSENT}
+    return {"found": True, "path": str(path), "path_scope": scope,
             "selected": data.get("selected"),
             "label": data.get("label"),
             "reason": data.get("reason")}
 
 
-def candidate_visual_review(cand_id: str) -> dict:
-    path = FINAL_DIR / f"{cand_id}.visual_review.md"
-    return {"path": str(path), "found": path.is_file()}
+def candidate_visual_review(cand_id: str, artwork_stem: str) -> dict:
+    """The visual review for one candidate of one artwork (scoped first)."""
+    path, scope = _choose_artefact(
+        FINAL_DIR / artwork_stem / f"{cand_id}.visual_review.md",
+        FINAL_DIR / f"{cand_id}.visual_review.md")
+    record = {"path": str(path), "found": path.is_file()}
+    record["path_scope"] = scope
+    return record
 
 
 # --------------------------------------------------------------------------
@@ -225,6 +320,29 @@ def candidate_visual_review(cand_id: str) -> dict:
 
 def _candidate_id(file_name: str) -> str:
     return file_name[: -len(".svg")] if file_name.endswith(".svg") else file_name
+
+
+def _scope_notes(back: dict, review: dict, decision: dict) -> list[str]:
+    """One note per artefact that had to fall back to a shared flat name.
+
+    A flat ``05_final/<candidate>.*`` (or ``04_validated/<candidate>.layer_a.txt``)
+    file is written by EVERY artwork whose trace produced that candidate file
+    stem, so reading it proves nothing about this run.  The note is what keeps the
+    fallback visible instead of silent.  It is an anomaly, not a blocking missing
+    link: closeout's gate counts ``missing_links``, and a legacy flat artefact is
+    readable data, not a failed stage.
+    """
+    notes: list[str] = []
+    for key in ("manifest", "proof_png", "print_pdf", "layer_a_txt", "layer_b_txt"):
+        entry = back.get(key) or {}
+        if entry.get("path_scope") == PATH_SCOPE_FLAT:
+            notes.append(f"back-half {key} read from the shared flat name "
+                         f"'{entry.get('path')}' -- not attributable to this run")
+    for label, entry in (("visual review", review), ("human decision", decision)):
+        if (entry or {}).get("path_scope") == PATH_SCOPE_FLAT:
+            notes.append(f"{label} read from the shared flat name "
+                         f"'{(entry or {}).get('path')}' -- not attributable to this run")
+    return notes
 
 
 def _build_candidates(stem, sweep, comparison) -> list[dict]:
@@ -286,9 +404,16 @@ def _build_candidates(stem, sweep, comparison) -> list[dict]:
         else:
             candidate["comparison"] = None
 
-        candidate["back_half"] = candidate_back_half(cand_id)
-        candidate["visual_review"] = candidate_visual_review(cand_id)
+        candidate["back_half"] = candidate_back_half(cand_id, stem)
+        candidate["visual_review"] = candidate_visual_review(cand_id, stem)
         candidate["human_decision"] = candidate_decision(cand_id, stem)
+        # Artefacts that had to be read from a shared flat name are recorded as
+        # anomalies on the candidate, so "this is not provably this run's file"
+        # survives into the run record instead of being lost in a path string.
+        candidate["anomalies"] = _scope_notes(candidate["back_half"],
+                                              candidate["visual_review"],
+                                              candidate["human_decision"])
+        #label-run-record-artefact-scope
         candidates.append(candidate)
 
     candidates.sort(key=lambda c: c["id"])

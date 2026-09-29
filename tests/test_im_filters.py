@@ -31,8 +31,10 @@ the engine carry ``needs_imagemagick`` so a host without it still runs clean.
 Run with:  python3 -m pytest tests/test_im_filters.py -v
 """
 
+import itertools
 import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -102,6 +104,280 @@ def write_ramp_png(path, size=(96, 64)):
 
 
 THREE_FLAT = [(255, 0, 0), (0, 0, 0), (251, 251, 242)]
+
+
+# --------------------------------------------------------------------------
+# PNG fixture surgery -- hand-built chunks, so the clock-chunk tests do not
+# depend on any ImageMagick version being the one that stamps them
+#
+# The 6.x flake was invisible on this box precisely because the installed
+# ImageMagick (7.1.1-43) DOES honour `png:exclude-chunk=date,time`.  Building
+# the chunks directly is what makes the post-pass testable where the engine
+# cannot reproduce it.
+# --------------------------------------------------------------------------
+
+def _png_chunk(chunk_type, payload):
+    import struct
+    import zlib
+
+    return (struct.pack(">I", len(payload)) + chunk_type + payload
+            + struct.pack(">I", zlib.crc32(chunk_type + payload) & 0xffffffff))
+
+
+def _text_chunk(keyword, text=""):
+    return _png_chunk(b"tEXt", keyword.encode("latin-1") + b"\x00"
+                      + text.encode("latin-1"))
+
+
+def _iccp_chunk():
+    import zlib
+
+    from PIL import ImageCms
+
+    profile = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+    # iCCP payload: keyword, NUL, compression method 0, zlib-compressed profile.
+    return _png_chunk(b"iCCP", b"sRGB\x00\x00" + zlib.compress(profile))
+
+
+def _phys_chunk():
+    import struct
+
+    return _png_chunk(b"pHYs", struct.pack(">IIB", 300, 300, 1))
+
+
+def _chunk_list(data):
+    """[(type, full_chunk_bytes)] -- an independent walker for the fixtures."""
+    import struct
+
+    chunks = []
+    pos = 8                                    # skip the 8-byte signature
+    while pos + 8 <= len(data):
+        length = struct.unpack(">I", data[pos:pos + 4])[0]
+        end = pos + 12 + length
+        assert end <= len(data), "fixture is not a well-formed PNG"
+        chunks.append((data[pos + 4:pos + 8], data[pos:end]))
+        pos = end
+    return chunks
+
+
+def _text_keywords(data):
+    return [chunk[8:].split(b"\x00", 1)[0].decode("latin-1")
+            for chunk_type, chunk in _chunk_list(data)
+            if chunk_type == b"tEXt"]
+
+
+def png_with_clock_chunks(path, size=(16, 16)):
+    """A PNG as ImageMagick 6.9.12 leaves it: date chunks in, profile kept."""
+    import io
+
+    buffer = io.BytesIO()
+    Image.new("RGB", size, (200, 30, 40)).save(buffer, "PNG")
+    data = buffer.getvalue()
+    chunks = _chunk_list(data)
+    extra = b"".join((
+        _iccp_chunk(),
+        _phys_chunk(),
+        _text_chunk("Software", "ImageMagick 6.9.12-98"),
+        _text_chunk("date:create", "2026-09-29T10:00:00+00:00"),
+        _text_chunk("date:modify", "2026-09-29T10:00:00+00:00"),
+        _text_chunk("date:timestamp", "2026-09-29T10:00:01+00:00"),
+    ))
+    # header + IHDR + the extra chunks + everything the engine wrote after IHDR
+    rebuilt = data[:8] + chunks[0][1] + extra + b"".join(
+        chunk for _type, chunk in chunks[1:])
+    with open(path, "wb") as handle:
+        handle.write(rebuilt)
+    return path
+
+
+# --------------------------------------------------------------------------
+# The clock chunks (reproducibility independent of the ImageMagick version)
+# --------------------------------------------------------------------------
+
+def test_clock_chunks_are_stripped_and_every_other_chunk_survives(tmp_path):
+    """The fix for the 6.x flake: drop ONLY date:create/modify/timestamp.
+
+    `-strip` would also drop the profile, which is wrong for print colour, so
+    this asserts the opposite: iCCP, pHYs, another tEXt and the pixel data all
+    come through byte for byte.
+    """
+    fixture = png_with_clock_chunks(str(tmp_path / "stamped.png"))
+    before = open(fixture, "rb").read()
+
+    # The fixture must really carry the clock, or the test proves nothing.
+    keywords = _text_keywords(before)
+    for keyword in imf.TIME_CHUNK_KEYWORDS:
+        assert keyword in keywords, "fixture is missing %s" % keyword
+
+    cleaned = imf.strip_png_time_chunks_bytes(before)
+
+    # (a) they are gone...
+    after_keywords = _text_keywords(cleaned)
+    assert not set(after_keywords) & set(imf.TIME_CHUNK_KEYWORDS)
+
+    # (b) ...and every other chunk is byte-identical, in order: the profile,
+    # the pHYs, the unrelated tEXt and the pixel data included.
+    expected = [(chunk_type, chunk) for chunk_type, chunk in _chunk_list(before)
+                if not (chunk_type == b"tEXt"
+                        and chunk[8:].split(b"\x00", 1)[0].decode("latin-1")
+                        in imf.TIME_CHUNK_KEYWORDS)]
+    assert _chunk_list(cleaned) == expected
+    types = [chunk_type for chunk_type, _chunk in _chunk_list(cleaned)]
+    assert b"iCCP" in types and b"pHYs" in types
+    assert "Software" in after_keywords
+    assert [chunk for chunk_type, chunk in _chunk_list(cleaned)
+            if chunk_type == b"IDAT"] == [
+        chunk for chunk_type, chunk in _chunk_list(before)
+        if chunk_type == b"IDAT"]
+
+    # (c) it still opens, with identical pixels.
+    import io
+
+    with Image.open(fixture) as original:
+        original_pixels = original.convert("RGB").tobytes()
+        original_size = original.size
+    with Image.open(io.BytesIO(cleaned)) as stripped:
+        assert stripped.size == original_size
+        assert stripped.convert("RGB").tobytes() == original_pixels
+
+
+def test_strip_file_rewrites_once_and_is_then_a_no_op(tmp_path):
+    """Idempotent, and a clean file is not rewritten at all."""
+    fixture = png_with_clock_chunks(str(tmp_path / "stamped.png"))
+    assert imf.strip_png_time_chunks(fixture) is True
+    once = open(fixture, "rb").read()
+    assert imf.strip_png_time_chunks(fixture) is False
+    assert open(fixture, "rb").read() == once
+
+    clean = write_png(str(tmp_path / "clean.png"), THREE_FLAT)
+    clean_bytes = open(clean, "rb").read()
+    assert imf.strip_png_time_chunks_bytes(clean_bytes) == clean_bytes
+    assert imf.strip_png_time_chunks(clean) is False
+    assert open(clean, "rb").read() == clean_bytes
+
+
+def test_stripper_leaves_anything_it_cannot_parse_alone(tmp_path):
+    """A post-pass that guessed at an unusual stream could corrupt a proof."""
+    junk = tmp_path / "not-a.png"
+    junk.write_bytes(b"not a png at all")
+    assert imf.strip_png_time_chunks(str(junk)) is False
+    assert junk.read_bytes() == b"not a png at all"
+
+    # Truncated mid-chunk: refused, not partially rewritten.
+    fixture = png_with_clock_chunks(str(tmp_path / "stamped.png"))
+    truncated = open(fixture, "rb").read()[:-7]
+    assert imf.strip_png_time_chunks_bytes(truncated) == truncated
+
+
+def test_identity_never_goes_through_the_clock_stripper(tmp_path, monkeypatch):
+    """The control is a byte copy -- post-processing it would break that."""
+    seen = []
+    monkeypatch.setattr(imf, "strip_png_time_chunks",
+                        lambda path: seen.append(path) or False)
+    src = write_png(str(tmp_path / "art.png"), THREE_FLAT)
+    entry = imf.run_preset((ENGINE, src, str(tmp_path), "identity", None, None))
+    assert "error" not in entry, entry
+    assert seen == []
+    assert "time_chunks_stripped" not in entry
+
+
+@needs_imagemagick
+def test_every_transcoding_variant_goes_through_the_clock_stripper(
+        tmp_path, monkeypatch):
+    """The call site, pinned: a new preset must not silently skip the pass."""
+    seen = []
+    real = imf.strip_png_time_chunks
+
+    def recorder(path):
+        seen.append(path)
+        return real(path)
+
+    monkeypatch.setattr(imf, "strip_png_time_chunks", recorder)
+    src = write_png(str(tmp_path / "art.png"), THREE_FLAT)
+    entry = imf.run_preset((ENGINE, src, str(tmp_path), "flatten", None,
+                            "#ffffff"))
+    assert "error" not in entry, entry
+    assert seen == [entry["output"]]
+    # Whether it rewrote the file depends on the engine (IM 7 honours the
+    # define, IM 6 does not), so only the KEY is asserted here -- the property
+    # that matters is that the pass ran.
+    assert "time_chunks_stripped" in entry
+
+
+@needs_imagemagick
+def test_run_preset_is_reproducible_when_the_define_is_inert(tmp_path,
+                                                             monkeypatch):
+    """The IM 6 condition, reproduced on this box -- no sleep, no IM 6.
+
+    IM 7.1.1-43 honours `png:exclude-chunk=date,time`, so this box cannot
+    trigger the flake by simply running the bench.  What it CAN do is build the
+    bytes IM 6.9.12 produces: the same argv with that define dropped (the
+    engine then stamps all three date chunks, measured) plus the three chunks
+    set to a DIFFERENT value per call, so the two builds' raw output differs
+    for the same reason a 6.x rerun's did -- the clock, not the pixels.
+
+    `run_preset` must make those two byte-identical anyway, because it strips
+    the chunks itself rather than trusting the define.
+    """
+    counter = itertools.count(1)
+    real_argv = imf.filter_argv
+
+    def im6_argv(driver, src, dst, preset, flatten_hex=None, palettes=None):
+        argv = list(real_argv(driver, src, dst, preset, flatten_hex, palettes))
+        index = argv.index("png:exclude-chunk=date,time")
+        assert argv[index - 1] == "-define"
+        del argv[index - 1:index + 1]
+        stamp = "2026-09-29T10:00:%02d+00:00" % next(counter)
+        return argv[:-1] + ["-set", "date:create", stamp,
+                            "-set", "date:modify", stamp,
+                            "-set", "date:timestamp", stamp, argv[-1]]
+
+    # Sanity: without the post-pass those bytes really do differ, so a pass on
+    # the run_preset comparison below is not vacuous.
+    src = write_png(str(tmp_path / "art.png"), THREE_FLAT)
+    raw = []
+    for name in ("raw_a.png", "raw_b.png"):
+        argv = im6_argv(ENGINE, src, os.path.join(str(tmp_path), name), "flat6",
+                        None, "#ffffff")
+        subprocess.run(argv, check=True, capture_output=True)
+        raw.append(open(argv[-1], "rb").read())
+    assert b"date:create" in raw[0], "the fixture did not get the clock stamped"
+    assert raw[0] != raw[1], "fixture produced identical bytes; test is vacuous"
+
+    monkeypatch.setattr(imf, "filter_argv", im6_argv)
+    first = imf.run_preset((ENGINE, src, str(tmp_path), "flat6", None,
+                            "#ffffff"))
+    assert "error" not in first, first
+    assert first["time_chunks_stripped"] is True, (
+        "the pass did not remove anything -- is the define being trusted?")
+    first_bytes = open(first["output"], "rb").read()
+
+    second = imf.run_preset((ENGINE, src, str(tmp_path), "flat6", None,
+                             "#ffffff"))
+    assert "error" not in second, second
+    second_bytes = open(second["output"], "rb").read()
+
+    assert first_bytes == second_bytes, (
+        "two builds whose only difference is the clock came out different: "
+        "reproducibility still depends on the ImageMagick version")
+
+
+@needs_imagemagick
+def test_written_variants_carry_no_clock_chunks(tmp_path):
+    """What the 6.x run would now get: no date chunks in the output, whatever
+    the installed ImageMagick does with `png:exclude-chunk`."""
+    src = write_ramp_png(str(tmp_path / "art.png"))
+    rc = imf.build(src, str(tmp_path), ["flat6", "remap-auto", "identity"],
+                   False, "#ffffff", 1, False, spec_palette=("#FF0000",))
+    assert rc == 0
+    base = os.path.join(str(tmp_path), "art")
+    for preset in ("flat6", "remap-auto"):
+        data = open(os.path.join(base, "%s.png" % preset), "rb").read()
+        assert not set(_text_keywords(data)) & set(imf.TIME_CHUNK_KEYWORDS), \
+            "%s carries a wall-clock tEXt chunk" % preset
+        # and it is a real PNG the rest of the chain can still read
+        with Image.open(os.path.join(base, "%s.png" % preset)) as image:
+            assert image.mode == "RGB"
 
 
 # --------------------------------------------------------------------------

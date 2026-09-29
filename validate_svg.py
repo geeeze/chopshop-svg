@@ -9,18 +9,48 @@ open geometry).
 
 Checks performed
 ----------------
-1. Raster embeds   : <image> elements anywhere in the document, including
-                     <image> nested inside <pattern>.
-2. Colour budget   : every unique colour used by ``fill``, ``stroke`` and
-                     ``stop-color`` (presentation attributes, inline ``style``
-                     attributes and simple CSS rules in a <style> element) is
-                     normalised to lowercase 6-digit hex and counted.
-3. Stroke widths   : elements that actually stroke are checked against the
+1. Raster embeds   : anything that pulls a bitmap -- or a whole other document --
+                     into the artwork: ``<image>`` anywhere (including nested
+                     inside ``<pattern>``), ``<feImage>`` with a ``data:`` /
+                     ``file:`` / external href, ``<foreignObject>`` (it
+                     rasterises XHTML), an ``<image>``/``<use>`` whose href is a
+                     non-fragment document or a ``data:`` URI, and a
+                     ``url(data:image/...)`` reference in a ``<style>`` block or
+                     an inline style.
+2. Gradients       : when ``geometry.allow_gradients`` is false, either a
+                     declared ``<linearGradient>``/``<radialGradient>`` or any
+                     paint-server reference (``url(...)`` in ``fill``,
+                     ``stroke``, ``stop-color``, ``flood-color``,
+                     ``lighting-color``) is a hard failure (GRADIENT_NOT_ALLOWED).
+3. Colour budget   : every unique colour in force for an element that paints --
+                     ``fill``, ``stroke`` and ``stop-color`` (presentation
+                     attributes, inline ``style`` attributes and simple CSS
+                     rules in a ``<style>`` element), including the implicit
+                     black of a shape whose cascade never sets ``fill`` and
+                     ``currentColor`` resolved from the inherited ``color``
+                     property -- is normalised to lowercase 6-digit hex and
+                     counted.
+4. Stroke widths   : shape elements that actually stroke are checked against the
                      minimum, with ``pt``/``px``/``mm``/``cm``/``in``/``pc``/``q``
                      units converted to points (1in = 96px = 72pt = 25.4mm).
-4. Geometry        : <path> elements are parsed with ``svgpathtools``; open
+5. Geometry        : <path> elements are parsed with ``svgpathtools``; open
                      paths and degenerate (zero-length / zero-area) paths are
                      flagged.
+
+Advisory observations (notes, never failures)
+---------------------------------------------
+* ``EFFECT_REFERENCE``    : a ``filter`` / ``mask`` / ``clip-path`` reference
+                            can change the ink and layer A cannot measure the
+                            result; layer B renders it.
+* ``TRANSLUCENT_PAINT``   : an opacity strictly between 0 and 1.  A spot-colour
+                            screen can print a tint, so this is never a failure,
+                            but it can move the flat-ink count.
+* ``UNCHECKED_DEFINITION``: content inside a definition container that nothing
+                            references is not stroke- or colour-checked, so
+                            coverage is partial and the operator is told.
+* ``STROKE_SCALE_TRANSFORM``: a ``transform="scale(...)"`` is in scope of a
+                            stroked element, so the measured width is not the
+                            printed one.
 
 Exit codes
 ----------
@@ -38,12 +68,53 @@ Known limitations (deliberate, reported rather than guessed)
 * CSS support covers type, ``.class``, ``#id`` and ``*`` selectors, including
   descendant chains and comma-separated groups. Child/sibling combinators,
   attribute selectors, pseudo-classes and pseudo-elements are skipped rather
-  than mis-applied, and ``!important`` does not out-rank the cascade.
+  than mis-applied. ``!important`` **is** ranked, but only across the sources
+  this module models: an inline ``!important`` declaration out-ranks an
+  ``!important`` stylesheet rule, which out-ranks an ordinary inline
+  declaration, which out-ranks an ordinary stylesheet rule of any specificity.
+  The full CSS origin ladder (user-agent / user / author origins) is not
+  modelled, because nothing in this pipeline emits those origins.
 * ``@media print`` and ``@media all`` blocks are applied; other at-rules
   (``@media screen``, ``@page``, ``@font-face``, ``@keyframes``) are ignored.
-* Colours in ``<style>`` blocks are counted, but ``var(--x)`` / ``url(#grad)``
-  paint-server references are not resolved to their component colours, and the
-  colours of a referenced gradient are counted from its ``<stop>`` elements.
+* ``var(--x)`` references are not resolved.  A ``url(...)`` paint-server
+  reference is reported by name, never resolved to a colour: with gradients
+  banned it is a hard failure (GRADIENT_NOT_ALLOWED), and with them allowed the
+  colours of a gradient are counted from its ``<stop>`` elements -- including
+  the stops of a gradient that nothing references, because a declared colour is
+  what the colour budget and the palette check are about (``snap_colors``
+  rewrites ``stop-color`` for the same reason).  That is a deliberate
+  over-report, and a colour alone can therefore never *under*-report the budget.
+  A ``url(...)`` paint with a CSS fallback colour counts as the reference, not
+  as the fallback.
+* Implicit and inherited paint is counted, but the *rendered* result is not:
+  ``currentColor`` with no ``color`` in scope resolves to the initial value,
+  which every renderer this was measured against paints as black
+  (``#000000``).  A colour that a later declaration overrides still occupies a
+  budget slot, because the budget counts declarations, not final pixels.
+* Paint inherited through a ``<use>`` is not modelled as instantiation: the
+  referenced element is checked with the property values in force at its
+  definition site, not those on the ``<use>``.  Content inside ``<defs>``,
+  ``<symbol>``, ``<pattern>``, ``<mask>`` or ``<marker>`` is checked only when
+  something references it (a ``<use href="#id">`` or a ``url(#id)``); when
+  nothing does, it cannot print, so it is reported once under
+  UNCHECKED_DEFINITION rather than raising a hard finding on invisible art.
+  Content inside ``<clipPath>``, ``<filter>``, ``<style>``, ``<metadata>``,
+  ``<title>``, ``<desc>``, ``<script>``, ``<view>`` or ``<cursor>`` can never
+  ink, so it is never checked, referenced or not.
+* A ``<filter>`` / ``<mask>`` / ``clip-path`` reference changes the ink in ways
+  layer A cannot measure (blur, flood, luminance, clipping): it is reported once
+  under EFFECT_REFERENCE and left to layer B's rendered proof.
+* ``opacity="0"``, ``display="none"``, ``visibility:hidden`` and
+  ``stroke-opacity="0"`` mean "does not paint" and are excluded from the stroke
+  and colour checks.  ``visibility`` is honoured per element, so a descendant
+  that sets ``visibility:visible`` paints again, exactly as CSS says.
+* What this module still cannot prove, after all of the above: that the file
+  *renders* as declared.  It reads declarations, so it cannot see a gradient's
+  real ink (when one is allowed), a filter's output, a blend/composite, a font
+  substitution, a stroke a RIP thins, or a colour outside its gamut.  Those are
+  layer B's job -- ``preflight.py`` renders and measures.  Layer A's claim is
+  only that the declared properties satisfy the spec, and that anything it
+  cannot read is reported rather than passed.
 * Every ``<path>`` that renders nothing (no ``d``, blank ``d``, or moveto-only
   ``d``) is reported under ZERO_AREA_PATH, since empty artwork is a preflight
   defect.
@@ -71,6 +142,7 @@ from svgpathtools import parse_path
 
 SVG_NS = "http://www.w3.org/2000/svg"
 XLINK_NS = "http://www.w3.org/1999/xlink"
+XLINK_HREF = "{%s}href" % XLINK_NS
 
 # SVG length units -> user units.  These are the CSS reference ratios
 # (1in = 96 user units); they are NOT physical sizes.  A user unit only becomes
@@ -129,6 +201,78 @@ RULE_NODES = "NODE_COUNT"
 RULE_STROKE_SCALE = "STROKE_SCALE_TRANSFORM"
 RULE_PALETTE = "PALETTE"
 RULE_DIMENSIONS = "DIMENSIONS"
+
+# v4.x: the source-level gate must enforce what the spec says, so a gradient that
+# only layer B's rendered ink count used to catch is now a layer A hard failure.
+# PINNED: the studio's help text and its proof-page checklist name this string.
+RULE_GRADIENT = "GRADIENT_NOT_ALLOWED"
+
+# Advisory tags.  These are written into ``notes``, never into ``failures``, so
+# they can never fail a job in either layer -- which is the point: layer A cannot
+# measure what they describe, and a hard finding on unmeasurable art would be a
+# false failure.  RULE_EFFECT is PINNED for the same reason RULE_GRADIENT is.
+RULE_EFFECT = "EFFECT_REFERENCE"
+RULE_TRANSLUCENT = "TRANSLUCENT_PAINT"
+RULE_UNCHECKED = "UNCHECKED_DEFINITION"
+
+# --------------------------------------------------------------------------
+# Paint scopes: which elements actually put ink on the sheet
+# --------------------------------------------------------------------------
+
+# Shape elements: the only elements whose own fill/stroke reach the sheet.
+# A <g> declares paint for its children but paints nothing itself, so it is not
+# here -- counting it would report the same hairline twice.
+_SHAPE_ELEMENTS = frozenset({
+    "path", "rect", "circle", "ellipse", "line", "polyline", "polygon",
+    "text", "tspan", "textpath", "use",
+})
+
+# Containers whose content can NEVER ink, referenced or not: a clip path
+# defines geometry, a filter defines pixels, a stylesheet defines rules.  Their
+# subtrees are skipped for stroke and colour purposes.
+#
+# Members are lowercase on purpose.  The lookup lowercases the element name, and
+# the previous spelling of this set held "clipPath"/"linearGradient"/
+# "radialGradient" -- camelCase members that could never match, so a stroked
+# path inside a <clipPath> was reported as a hairline.  A set whose members are
+# unreachable is the bug; one case for both sides is the fix.
+_INERT_CONTAINERS = frozenset({
+    "clippath", "filter", "style", "metadata", "title", "desc", "script",
+    "view", "cursor",
+})
+
+# A gradient paints through its <stop> declarations, so its stops still take
+# part in the colour budget (that is what snap_colors rewrites); it holds no
+# stroked shape.
+_INK_RESOURCE_CONTAINERS = frozenset({"lineargradient", "radialgradient"})
+_GRADIENT_ELEMENTS = _INK_RESOURCE_CONTAINERS
+
+# Containers whose content DOES paint, but only when something references it
+# (a <use href="#id"> or a url(#id) on fill/stroke/clip-path/mask/filter).
+# Unreferenced, they cannot print: reported once as UNCHECKED_DEFINITION
+# coverage rather than failed.
+_DEFERRED_INK_CONTAINERS = frozenset({
+    "defs", "symbol", "pattern", "mask", "marker",
+})
+
+# The paint properties that can name a paint server.
+_PAINT_PROPERTIES = ("fill", "stroke", "stop-color", "flood-color",
+                     "lighting-color")
+
+# Effect references: they change the ink in ways a declaration reader cannot
+# measure (blur, flood, luminance, clipping), so they are advisory only.
+_EFFECT_PROPERTIES = ("filter", "mask", "clip-path")
+
+# The initial value of ``color`` (CSS ``CanvasText``), used to resolve
+# ``currentColor`` when nothing in scope declares ``color``.
+_INITIAL_COLOR = "#000000"
+
+_URL_RE = re.compile(r"url\(\s*(['\"]?)(?P<url>[^'\")]*)\1\s*\)", re.IGNORECASE)
+_DATA_IMAGE_RE = re.compile(r"url\(\s*['\"]?data:image/", re.IGNORECASE)
+
+# Inherited keywords that hand resolution back to the ancestor (or the initial
+# value for ``initial``).
+_INHERIT_KEYWORDS = ("inherit", "unset", "revert", "revert-layer")
 
 # --------------------------------------------------------------------------
 # CSS colour keywords (CSS Color Level 4 named colours)
@@ -211,8 +355,16 @@ def _localname(element):
 
 
 def _describe(element, index):
-    """Human-readable reference to an element, e.g. ``Path id='p1'``."""
-    name = _localname(element).capitalize() or "Element"
+    """Human-readable reference to an element, e.g. ``Path id='p1'``.
+
+    The tag keeps the spelling SVG gives it (``linearGradient``,
+    ``foreignObject``), with the first letter upper-cased so a report reads as
+    a sentence: an element name that is silently lower-cased is how
+    ``<linearGradient>`` would be printed as ``Lineargradient``, which nobody
+    would grep for.
+    """
+    local = _localname(element)
+    name = (local[:1].upper() + local[1:]) if local else "Element"
     eid = element.get("id")
     if eid:
         return "%s id='%s'" % (name, eid)
@@ -351,15 +503,37 @@ _SIMPLE_SELECTOR_RE = re.compile(r"([.#]?)([-\w]+)")
 
 
 def parse_style_block(style):
-    """Parse ``fill:#fff; stroke-width:2pt`` into a property dict."""
+    """Parse ``fill:#fff; stroke-width:2pt`` into a property dict.
+
+    Kept as the plain-value view of a declaration block; ``!important`` is
+    handled by ``_parse_declarations``, which the cascade uses because a flag
+    that is silently discarded is a cascade that resolves the wrong value.
+    """
+    return {prop: value for prop, (value, _important)
+            in _parse_declarations(style).items()}
+
+
+def _parse_declarations(style):
+    """Parse a declaration block into ``{property: (value, important)}``.
+
+    ``!important`` is *carried*, not stripped: CSS ranks it above ordinary
+    declarations, and an inline ``fill:#0f0`` must lose to a stylesheet
+    ``rect{fill:#f00 !important}``.  Last declaration wins per property, as CSS
+    says.
+    """
     result = {}
     if not style:
         return result
     for prop, value in _DECL_RE.findall(style):
         key = prop.strip().lower()
-        value = re.sub(r"!\s*important\s*$", "", value.strip(), flags=re.IGNORECASE)
-        if key:
-            result[key] = value.strip()      # last declaration wins, per CSS
+        if not key:
+            continue
+        text = value.strip()
+        important = bool(re.search(r"!\s*important\s*$", text, re.IGNORECASE))
+        if important:
+            text = re.sub(r"!\s*important\s*$", "", text,
+                          flags=re.IGNORECASE).strip()
+        result[key] = (text, important)
     return result
 
 
@@ -476,10 +650,27 @@ def _matches_chain(element, compounds):
 class StyleContext(object):
     """Resolves CSS properties for elements, honouring the SVG cascade.
 
-    Priority (highest first): inline ``style`` attribute, CSS rules from
-    <style> elements (by specificity, later wins on a tie), presentation
-    attribute.  Unsupported selector forms are skipped rather than guessed at.
+    Priority (highest first), exactly as CSS ranks them:
+
+    1. an ``!important`` declaration in an inline ``style`` attribute,
+    2. an ``!important`` rule from a <style> element (by specificity, later
+       wins on a tie),
+    3. an ordinary declaration in an inline ``style`` attribute,
+    4. an ordinary rule from a <style> element (by specificity, later wins on
+       a tie),
+
+    then the presentation attribute, whose value loses to any stylesheet rule.
+    Unsupported selector forms are skipped rather than guessed at.
     """
+
+    # Cascade ranks.  Importance out-ranks specificity, which is why they are
+    # separate numbers rather than one sort key: `rect{fill:#f00 !important}`
+    # beats `style="fill:#0f0"` even though an inline declaration has no
+    # selector of its own, and an important inline declaration beats both.
+    _RANK_INLINE_IMPORTANT = 3
+    _RANK_CSS_IMPORTANT = 2
+    _RANK_INLINE = 1
+    _RANK_CSS = 0
 
     def __init__(self, root):
         self._styles = {}
@@ -488,14 +679,14 @@ class StyleContext(object):
         for element in root.iter():
             if not isinstance(element.tag, str):
                 continue
-            self._styles[element] = parse_style_block(element.get("style"))
+            self._styles[element] = _parse_declarations(element.get("style"))
             if _localname(element).lower() == "style":
                 self._load_css(element)
 
     def _load_css(self, style_element):
         text = _flatten_css("".join(style_element.itertext()))
         for selector_group, body in re.findall(r"([^{}]+)\{([^{}]*)\}", text):
-            declarations = parse_style_block(body)
+            declarations = _parse_declarations(body)
             if not declarations:
                 continue
             for selector in selector_group.split(","):
@@ -503,9 +694,9 @@ class StyleContext(object):
                 if parsed is None:
                     continue
                 specificity, compounds = parsed
-                for prop, value in declarations.items():
+                for prop, (value, important) in declarations.items():
                     self._rules.setdefault(prop, []).append(
-                        (specificity, compounds, value))
+                        (important, specificity, compounds, value))
 
     def get(self, element, prop):
         """Return (value, source) or (None, None) when the property is unset.
@@ -522,23 +713,219 @@ class StyleContext(object):
         return result
 
     def _resolve(self, element, prop):
+        best_rank = None
+        best_specificity = ()
+        best_value = None
+        best_source = None
+
         inline = self._styles.get(element)
         if inline and prop in inline:
-            return inline[prop], "style"
+            value, important = inline[prop]
+            best_rank = (self._RANK_INLINE_IMPORTANT if important
+                         else self._RANK_INLINE)
+            best_value, best_source = value, "style"
 
-        best = None
-        for specificity, compounds, value in self._rules.get(prop, ()):
+        # Rules are stored in source order, so a later rule of equal
+        # specificity overwrites an earlier one without a tie-breaker: the
+        # comparison below is >=, and the list is walked front to back.
+        for important, specificity, compounds, value in self._rules.get(prop, ()):
             if not _matches_chain(element, compounds):
                 continue
-            if best is None or specificity >= best[0]:
-                best = (specificity, value)
-        if best is not None:
-            return best[1], "css"
+            rank = (self._RANK_CSS_IMPORTANT if important else self._RANK_CSS)
+            if best_rank is not None:
+                if rank < best_rank:
+                    continue
+                if rank == best_rank and specificity < best_specificity:
+                    continue
+            best_rank = rank
+            best_specificity = specificity
+            best_value, best_source = value, "css"
+
+        if best_value is not None:
+            return best_value, best_source
 
         attr = element.get(prop)
         if attr is not None:
             return attr, "attr"
         return None, None
+
+
+def _inherited_value(element, styles, prop, initial=None):
+    """Resolve an inherited property, walking ancestors.
+
+    ``stroke``, ``stroke-width``, ``stroke-opacity``, ``fill``,
+    ``fill-opacity``, ``color`` and ``visibility`` are inherited properties, so
+    one walk covers them all: the nearest declaration on the element or an
+    ancestor wins, ``inherit``/``unset``/``revert`` hand resolution to the
+    parent, and ``initial`` (or nothing declared at all) falls back to
+    *initial*.
+
+    Returns ``(value, source, element_that_declared_it_or_None)``.  Returning
+    the declaring element lets a caller report where an inherited bound came
+    from instead of pretending the element declared it.
+    """
+    node = element
+    while node is not None:
+        if isinstance(node.tag, str):
+            value, source = styles.get(node, prop)
+            if value is not None:
+                text = str(value).strip().lower()
+                if text in _INHERIT_KEYWORDS:
+                    pass                      # keep walking up
+                elif text == "initial" or text.startswith("initial "):
+                    return initial, "initial", None
+                else:
+                    return value, source, node
+        node = node.getparent()
+    return initial, ("initial" if initial is not None else "unset"), None
+
+
+# --------------------------------------------------------------------------
+# Paint scopes: display/visibility, and what a definition container means
+# --------------------------------------------------------------------------
+
+def _paint_value(value):
+    """A property value as a plain lowercase string ('' for unset)."""
+    return str(value).strip() if value is not None else ""
+
+
+def _opacity_fraction(raw):
+    """Parse an opacity value to a 0..1 float, or None when unparseable.
+
+    SVG opacity is a number or a percentage; anything else is left to the
+    browser, so returning None here means "no claim", never "zero".
+    """
+    text = _paint_value(raw)
+    if not text:
+        return None
+    try:
+        if text.endswith("%"):
+            return float(text[:-1]) / 100.0
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _display_none(element, styles):
+    """True when the element (and everything under it) renders nothing.
+
+    ``display`` is not inherited, but a ``display:none`` subtree is never
+    rendered no matter what a descendant declares, so this is a subtree rule.
+    """
+    value, _ = styles.get(element, "display")
+    return _paint_value(value).rstrip(";").lower() == "none"
+
+
+def _opacity_zero(element, styles):
+    """True when ``opacity:0`` makes the element and its subtree invisible.
+
+    ``opacity`` is a group property: it applies to the element *and its
+    descendants* as one composite, so zero hides the whole subtree.
+    """
+    value, _ = styles.get(element, "opacity")
+    fraction = _opacity_fraction(value)
+    return fraction is not None and fraction <= 0.0
+
+
+def _visibility_in_force(element, styles, inherited):
+    """The ``visibility`` value in force, as "visible" or "hidden".
+
+    ``visibility`` is inherited but *overridable*: a descendant may set
+    ``visibility:visible`` and paint again inside a hidden parent, so a walker
+    must carry this value down and let each element change it.
+    """
+    value, _ = styles.get(element, "visibility")
+    text = _paint_value(value).lower()
+    if text in ("hidden", "collapse"):
+        return "hidden"
+    if text == "visible":
+        return "visible"
+    if text == "initial":
+        # The initial value of visibility is visible, so `initial` restores it.
+        return "visible"
+    return inherited
+
+
+def _referenced_ids(root):
+    """Every id the document references, as a set of strings.
+
+    Covers both paths SVG uses to instantiate something: ``<use href="#id">``
+    (and ``xlink:href``), and ``url(#id)`` in any attribute value -- a fill, a
+    clip-path, a mask, a filter.  A definition container nothing references
+    cannot put ink on the sheet, and this set is how that is decided.
+    """
+    referenced = set()
+    for element in root.iter():
+        if not isinstance(element.tag, str):
+            continue
+        for raw in element.attrib.values():
+            for match in _URL_RE.finditer(str(raw)):
+                target = match.group("url").strip().strip("'\"")
+                if target.startswith("#") and len(target) > 1:
+                    referenced.add(target[1:])
+        if _localname(element).lower() == "use":
+            for raw in (element.get("href"), element.get(XLINK_HREF)):
+                target = (raw or "").strip()
+                if target.startswith("#") and len(target) > 1:
+                    referenced.add(target[1:])
+    return referenced
+
+
+def _paint_scope(parent_scope, element, styles, referenced_ids):
+    """Narrow the paint scope when descending into *element*.
+
+    Scopes, from "puts ink on the sheet" down to "cannot":
+
+    * ``painted``   -- the element's own fill/stroke reach the sheet.
+    * ``resource``  -- a paint resource (a gradient): its <stop> declarations
+                       count towards the colour budget, its geometry does not
+                       stroke.
+    * ``unchecked`` -- inside a definition container nothing references.  It
+                       cannot print, so it is reported as partial coverage
+                       (UNCHECKED_DEFINITION) rather than failed.
+    * ``inert``     -- inside a container whose content can never ink
+                       (<clipPath>, <filter>, <style>, <metadata> ...).
+    * ``hidden``    -- ``display:none`` or ``opacity:0``: not rendered at all.
+    """
+    if parent_scope in ("hidden", "inert"):
+        return parent_scope
+
+    name = _localname(element).lower()
+    if _display_none(element, styles) or _opacity_zero(element, styles):
+        return "hidden"
+    if name in _INERT_CONTAINERS:
+        return "inert"
+    if element.get("id") in referenced_ids:
+        # A <use> or a url(#id) instantiates this subtree, even inside <defs>.
+        return "painted"
+    if name in _INK_RESOURCE_CONTAINERS:
+        return "resource"
+    if name in _DEFERRED_INK_CONTAINERS:
+        return "unchecked"
+    return parent_scope
+
+
+def _walk_paint_scopes(root, styles, referenced_ids):
+    """Yield ``(element, scope, visibility)`` for every element, in order.
+
+    ``scope`` is the element's effective paint scope (see ``_paint_scope``),
+    forced to "hidden" when the inherited ``visibility`` in force hides it;
+    ``visibility`` is that value, so a caller can hand it to children (which
+    may set ``visibility:visible`` and paint again).
+    """
+    def walk(element, scope, visibility):
+        child_visibility = _visibility_in_force(element, styles, visibility)
+        container_scope = _paint_scope(scope, element, styles, referenced_ids)
+        effective = ("hidden" if child_visibility == "hidden"
+                     else container_scope)
+        yield element, effective, child_visibility
+        for child in element:
+            if isinstance(child.tag, str):
+                for item in walk(child, container_scope, child_visibility):
+                    yield item
+
+    for item in walk(root, "painted", "visible"):
+        yield item
 
 
 # --------------------------------------------------------------------------
@@ -790,8 +1177,12 @@ def load_spec(spec_path, failures, notes):
         open_source = "default (neither allow_open_paths nor print_method given)"
 
     validation_block = spec.get("validation")
+    gradient_source = ("geometry.allow_gradients" if "allow_gradients" in geometry
+                      else "default (geometry.allow_gradients is not set)")
     resolved = {
         "allow_raster_embed": bool(geometry.get("allow_raster_embed", False)),
+        "allow_gradients": bool(geometry.get("allow_gradients", False)),
+        "allow_gradients_source": gradient_source,
         "allow_open_paths": allow_open,
         "open_paths_source": open_source,
         "min_stroke_width_pt": geometry.get("min_stroke_width_pt"),
@@ -929,15 +1320,54 @@ def load_spec(spec_path, failures, notes):
 # Rule 1: raster embeds
 # --------------------------------------------------------------------------
 
+def _href_of(element):
+    """The href in force for *element*, across the href and xlink:href forms."""
+    return (element.get("href") or element.get(XLINK_HREF) or "").strip()
+
+
+def _href_is_external(href):
+    """True for an href that pulls in a whole other document or a data: URI.
+
+    A ``#fragment`` stays inside this document (and can be vector), so it is
+    not external; anything else has to be fetched and cannot be audited here.
+    """
+    text = (href or "").strip().strip("'\"")
+    if not text:
+        return False
+    return not text.startswith("#")
+
+
 def check_raster_embeds(root, failures):
-    images = []
+    """Report every raster or rasterising source, not only ``<image>``.
+
+    An ``<image>`` was the whole of this check, which let three ways of getting
+    a bitmap into the artwork through with zero findings: an ``<feImage>``
+    inside a ``<filter>``, a ``<foreignObject>`` (which rasterises arbitrary
+    XHTML/CSS), and a ``<use>`` naming an external document.  All of them, plus
+    a ``url(data:image/...)`` in a stylesheet or an inline style, are counted
+    here -- one rule, one count, one message.
+    """
+    offenders = []                 # (element, kind, href_or_note)
     patterns_with_images = []
+
     for element in root.iter():
         if not isinstance(element.tag, str):
             continue
         name = _localname(element).lower()
+
         if name == "image":
-            images.append(element)
+            offenders.append((element, "image", _href_of(element) or "(no href)"))
+        elif name == "feimage":
+            href = _href_of(element)
+            if _href_is_external(href):
+                offenders.append((element, "feImage", href))
+        elif name == "foreignobject":
+            offenders.append((element, "foreignObject",
+                              "renders XHTML/CSS, so it rasterises"))
+        elif name == "use":
+            href = _href_of(element)
+            if _href_is_external(href):
+                offenders.append((element, "use", href))
         elif name == "pattern":
             for descendant in element.iter():
                 if isinstance(descendant.tag, str) and \
@@ -945,24 +1375,44 @@ def check_raster_embeds(root, failures):
                     patterns_with_images.append(element)
                     break
 
-    if images:
+        # A stylesheet or an inline style can pull in a bitmap as a paint
+        # server; url(#id) is a document-internal reference and is left alone.
+        style_text = element.get("style") or ""
+        if name == "style":
+            style_text = "".join(element.itertext())
+        for match in _DATA_IMAGE_RE.finditer(style_text):
+            offenders.append((element, "style url()",
+                              _shorten(style_text[match.start():])))
+
+    if not offenders:
+        return
+
+    count = len(offenders)
+    only_images = all(kind == "image" for _e, kind, _h in offenders)
+    if only_images:
         detail = ("Found %d embedded raster image%s but spec requires "
                   "vector-only artwork (allow_raster_embed=false)"
-                  % (len(images), "" if len(images) == 1 else "s"))
-        if patterns_with_images:
-            detail += "; %d inside <pattern> definitions" % len(patterns_with_images)
-        samples = []
-        for position, element in enumerate(images[:5], 1):
-            href = (element.get("href")
-                    or element.get("{%s}href" % XLINK_NS)
-                    or "(no href)")
-            samples.append("%s -> %s" % (_describe(element, position),
-                                         _shorten(href)))
-        if samples:
-            detail += ". Offenders: " + "; ".join(samples)
-        if len(images) > 5:
-            detail += " (plus %d more)" % (len(images) - 5)
-        failures.append((RULE_RASTER, detail))
+                  % (count, "" if count == 1 else "s"))
+    else:
+        detail = ("Found %d embedded raster source%s (an <image>, <feImage>, "
+                  "<foreignObject>, a non-fragment <use>/<image> href, or a "
+                  "data: image URL in a style) but spec requires vector-only "
+                  "artwork (allow_raster_embed=false)"
+                  % (count, "" if count == 1 else "s"))
+    if patterns_with_images:
+        detail += "; %d inside <pattern> definitions" % len(patterns_with_images)
+
+    samples = []
+    for position, (element, kind, note) in enumerate(offenders[:5], 1):
+        label = _describe(element, position)
+        if kind == "style url()":
+            label += " (%s)" % kind
+        samples.append("%s -> %s" % (label, _shorten(note)))
+    if samples:
+        detail += ". Offenders: " + "; ".join(samples)
+    if count > 5:
+        detail += " (plus %d more)" % (count - 5)
+    failures.append((RULE_RASTER, detail))
 
 
 def _shorten(text, limit=60):
@@ -974,20 +1424,121 @@ def _shorten(text, limit=60):
 # Rule 2: colour count
 # --------------------------------------------------------------------------
 
-def check_color_count(root, styles, max_colors, failures):
-    used = {}      # normalised colour -> set of source descriptions
-    for element in root.iter():
-        if not isinstance(element.tag, str):
+def _paint_server_reference(value):
+    """The raw ``url(...)`` target in a paint value, or None."""
+    match = _URL_RE.search(_paint_value(value))
+    if not match:
+        return None
+    return match.group("url").strip().strip("'\"") or "(empty)"
+
+
+def _normalise_paint(raw, element, styles):
+    """Normalise one paint declaration, resolving ``currentColor``.
+
+    ``currentColor`` is a colour, not a reason to skip one: it resolves to the
+    inherited ``color`` property (or that property's initial value, black, when
+    nothing declares it), so ``fill="currentColor"`` art is counted instead of
+    reading as using no ink at all.
+    """
+    text = _paint_value(raw)
+    if not text:
+        return None
+    if text.lower() in ("currentcolor", "current-color"):
+        inherited, _source, _declared_on = _inherited_value(
+            element, styles, "color", _INITIAL_COLOR)
+        return normalize_color(inherited if inherited is not None
+                               else _INITIAL_COLOR)
+    return normalize_color(text)
+
+
+def check_color_count(root, styles, max_colors, failures, stats=None, notes=None):
+    """Count every colour in force for an element that actually paints.
+
+    Three things the count used to miss, all of which made a budget look
+    smaller than it is -- and a black-fill artwork look like no ink at all:
+
+    * the implicit black of a shape whose cascade never sets ``fill`` (the SVG
+      initial value is black), skipped when the fill in force is ``none``/
+      ``transparent`` or its opacity is zero;
+    * ``currentColor``, resolved from the inherited ``color`` property;
+    * nothing else that paints, because the walk now skips ``display:none``
+      subtrees and definition content nothing references.
+
+    ``stop-color`` is counted for a gradient's stops whether or not the gradient
+    is referenced: that declaration is what ``snap_colors`` rewrites and what
+    the palette check has to see (see the module docstring).
+    """
+    used = {}      # normalised colour -> set of paint properties that used it
+    referenced = _referenced_ids(root)
+    hidden = 0
+    implicit = 0
+    currentcolor = 0
+
+    for element, scope, _visibility in _walk_paint_scopes(root, styles,
+                                                          referenced):
+        if scope in ("hidden", "inert", "unchecked"):
+            if scope == "hidden":
+                hidden += 1
             continue
         name = _localname(element).lower()
-        if name in ("style", "metadata"):
+
+        if name == "stop":
+            # A gradient declares its ink through <stop>, whether the gradient
+            # is referenced ("painted") or merely declared ("resource"): that
+            # declaration is what the budget and the palette check are about.
+            value, _source = styles.get(element, "stop-color")
+            colour = _normalise_paint(value, element, styles)
+            if colour:
+                if _paint_value(value).lower() in ("currentcolor",
+                                                   "current-color"):
+                    currentcolor += 1
+                used.setdefault(colour, set()).add("stop-color")
             continue
-        for prop in ("fill", "stroke", "stop-color"):
-            value, source = styles.get(element, prop)
-            colour = normalize_color(value)
-            if colour is None:
-                continue
-            used.setdefault(colour, set()).add(prop)
+
+        if scope == "resource":
+            # Any other content of a paint resource is not ink of its own.
+            continue
+
+        if name not in _SHAPE_ELEMENTS:
+            continue
+
+        # fill: an unset fill is not "no colour", it is black.
+        fill_raw, _fill_source, _fill_node = _inherited_value(
+            element, styles, "fill", None)
+        fill_opacity, _source, _node = _inherited_value(
+            element, styles, "fill-opacity", "1")
+        fill_fraction = _opacity_fraction(fill_opacity)
+        if fill_raw is None:
+            if fill_fraction is None or fill_fraction > 0.0:
+                implicit += 1
+                used.setdefault(_INITIAL_COLOR, set()).add("fill (implicit)")
+        elif fill_fraction is None or fill_fraction > 0.0:
+            if _paint_value(fill_raw).lower() in ("currentcolor",
+                                                 "current-color"):
+                currentcolor += 1
+            colour = _normalise_paint(fill_raw, element, styles)
+            if colour:
+                used.setdefault(colour, set()).add("fill")
+
+        # stroke: same inheritance, but a fully transparent stroke inks nothing.
+        stroke_raw, _stroke_source, _stroke_node = _inherited_value(
+            element, styles, "stroke", None)
+        stroke_opacity, _source, _node = _inherited_value(
+            element, styles, "stroke-opacity", "1")
+        stroke_fraction = _opacity_fraction(stroke_opacity)
+        if stroke_raw is not None and (
+                stroke_fraction is None or stroke_fraction > 0.0):
+            if _paint_value(stroke_raw).lower() in ("currentcolor",
+                                                    "current-color"):
+                currentcolor += 1
+            colour = _normalise_paint(stroke_raw, element, styles)
+            if colour:
+                used.setdefault(colour, set()).add("stroke")
+
+    if stats is not None:
+        stats["implicit_fill_elements"] = implicit
+        stats["currentcolor_elements"] = currentcolor
+        stats["hidden_elements"] = hidden
 
     if max_colors is None:
         return len(used), used
@@ -1004,73 +1555,315 @@ def check_color_count(root, styles, max_colors, failures):
 
 
 # --------------------------------------------------------------------------
+# Rule 2b: gradients, which the spec can ban outright
+# --------------------------------------------------------------------------
+
+def _css_paint_references(style_element):
+    """``(prop, url_target)`` for every paint declaration in one <style> block.
+
+    ``url(#id)`` in a *paint* property is a paint server; the same syntax in
+    ``clip-path``/``mask``/``filter`` is an effect, not paint, and is reported
+    by the effect advisory instead of here.
+    """
+    found = []
+    text = _flatten_css("".join(style_element.itertext()))
+    for _selector_group, body in re.findall(r"([^{}]+)\{([^{}]*)\}", text):
+        for prop, (value, _important) in _parse_declarations(body).items():
+            if prop not in _PAINT_PROPERTIES:
+                continue
+            target = _paint_server_reference(value)
+            if target is not None:
+                found.append((prop, target))
+    return found
+
+
+def check_gradients(root, styles, allow_gradients, failures, notes, stats,
+                    source=None):
+    """Enforce ``geometry.allow_gradients`` at the source level.
+
+    Until now the key was parsed and then never read: a two-stop gradient
+    painted with ``fill="url(#g)"`` passed layer A with zero findings, so
+    ``--layer-a-only`` (and a spec with ``validation.run_preflight: false``) let
+    continuous tone through the gate that claims to enforce the spec.  Only
+    layer B's rendered ink count caught it.
+
+    Both halves of the declaration are reported: the gradient *elements* the
+    document declares, and the sites that *paint* with a paint server.  A
+    ``url(...)`` that cannot be resolved to an element in this document is
+    reported too -- the honest answer is "this paints with something I cannot
+    read", never a silent pass.  With ``allow_gradients`` true nothing here
+    fails: process/CMYK work is allowed to carry tone.
+    """
+    declared = []
+    references = []                # (element, prop, target)
+
+    for element in root.iter():
+        if not isinstance(element.tag, str):
+            continue
+        name = _localname(element).lower()
+        if name in _GRADIENT_ELEMENTS:
+            declared.append(element)
+        for prop in _PAINT_PROPERTIES:
+            value, _source = styles.get(element, prop)
+            target = _paint_server_reference(value)
+            if target is not None:
+                references.append((element, prop, target))
+        if name == "style":
+            for prop, target in _css_paint_references(element):
+                references.append((element, prop, target))
+
+    stats["gradient_definitions"] = len(declared)
+    stats["gradient_paint_references"] = len(references)
+    if allow_gradients:
+        return
+
+    gradient_ids = {element.get("id") for element in declared}
+    element_kinds = {}
+    for element in root.iter():
+        if isinstance(element.tag, str) and element.get("id"):
+            element_kinds.setdefault(element.get("id"), _localname(element))
+    source_text = source or "geometry.allow_gradients"
+    if declared:
+        samples = "; ".join(
+            "%s (id=%r)" % (_describe(element, position),
+                            element.get("id") or "(none)")
+            for position, element in enumerate(declared[:5], 1))
+        detail = ("%d gradient definition%s found but geometry.allow_gradients "
+                  "is false (%s): this job is flat spot colour, so a gradient "
+                  "cannot be reproduced. Offenders: %s"
+                  % (len(declared), "" if len(declared) == 1 else "s",
+                     source_text, samples))
+        if len(declared) > 5:
+            detail += " (plus %d more)" % (len(declared) - 5)
+        failures.append((RULE_GRADIENT, detail))
+
+    if references:
+        samples = []
+        for position, (element, prop, target) in enumerate(references[:5], 1):
+            samples.append("%s %s='url(%s)' -> %s"
+                           % (_describe(element, position), prop, target,
+                              _describe_paint_target(target, gradient_ids,
+                                                     element_kinds)))
+        detail = ("%d paint-server reference%s found but "
+                  "geometry.allow_gradients is false (%s); these paints are "
+                  "unresolvable to a flat colour and cannot be checked as one. "
+                  "Offenders: %s"
+                  % (len(references), "" if len(references) == 1 else "s",
+                     source_text, "; ".join(samples)))
+        if len(references) > 5:
+            detail += " (plus %d more)" % (len(references) - 5)
+        failures.append((RULE_GRADIENT, detail))
+
+
+def _describe_paint_target(target, gradient_ids, element_kinds):
+    """Say what a ``url(...)`` resolves to, or that it cannot be resolved.
+
+    The answer has to be honest about *what* it found: a reference to a
+    ``<pattern>`` is a paint server but not a gradient, and saying "gradient"
+    about it would be a wrong report even if the failure is right.
+    """
+    if target.startswith("#"):
+        target_id = target[1:]
+        if target_id in gradient_ids:
+            return "the declared gradient id=%r" % target_id
+        kind = element_kinds.get(target_id)
+        if kind:
+            return ("<%s id=%r>, a paint server that is not a gradient"
+                    if kind in ("pattern",) else
+                    "<%s id=%r>, which is not a paint server"
+                    ) % (kind, target_id)
+        return "nothing: no element with id=%r in this document" % target_id
+    return "an external or data: paint server (%s)" % _shorten(target)
+
+
+# --------------------------------------------------------------------------
+# Rule 2c: advisory observations (never failures)
+# --------------------------------------------------------------------------
+
+def check_definition_coverage(root, styles, notes, stats):
+    """Report once when definition content was skipped, rather than failing it.
+
+    Content inside ``<defs>``/``<symbol>``/``<pattern>``/``<mask>``/
+    ``<marker>`` that nothing instantiates cannot print, so a hairline inside
+    it is not a print defect -- a hard finding there was a false failure on
+    artwork that prints fine.  The operator is still told that coverage is
+    partial, once, with a count.
+    """
+    referenced = _referenced_ids(root)
+    skipped = []
+    containers = set()
+    for element, scope, _visibility in _walk_paint_scopes(root, styles,
+                                                          referenced):
+        if scope != "unchecked":
+            continue
+        name = _localname(element).lower()
+        if name in _DEFERRED_INK_CONTAINERS:
+            containers.add(_localname(element))
+        elif name in _SHAPE_ELEMENTS:
+            skipped.append(element)
+
+    stats["unchecked_definition_elements"] = len(skipped)
+    if not skipped:
+        return
+    where = "/".join(sorted(containers)) or "definition containers"
+    notes.append(
+        "%s: %d shape element%s inside unreferenced <%s> content were not "
+        "stroke- or colour-checked -- nothing in this document instantiates "
+        "them, so they cannot print, and reporting them as failures would be a "
+        "false finding on invisible art. Coverage of this file is therefore "
+        "partial; use a <use> or a url(#id) reference if that content is meant "
+        "to print" % (RULE_UNCHECKED, len(skipped),
+                      "" if len(skipped) == 1 else "s", where))
+
+
+def check_translucency(root, styles, notes, stats):
+    """Record a partly transparent paint, without failing it.
+
+    An opacity strictly between 0 and 1 is not a defect: a spot-colour screen
+    prints a tint of the same ink.  It does move the *rendered* ink count
+    though (two tones of one ink can measure as two), so it is worth knowing
+    before layer B reports it.  Zero opacity is a different thing entirely --
+    that paints nothing, and the paint checks skip it.
+    """
+    referenced = _referenced_ids(root)
+    translucent = []
+    for element, scope, _visibility in _walk_paint_scopes(root, styles,
+                                                          referenced):
+        if scope != "painted":
+            continue
+        fraction = _opacity_fraction(styles.get(element, "opacity")[0])
+        if fraction is not None and 0.0 < fraction < 1.0:
+            translucent.append((element, "opacity", fraction))
+            continue
+        for prop in ("fill-opacity", "stroke-opacity"):
+            value, _source, _node = _inherited_value(element, styles, prop, None)
+            fraction = _opacity_fraction(value)
+            if fraction is not None and 0.0 < fraction < 1.0:
+                translucent.append((element, prop, fraction))
+
+    stats["translucent_elements"] = len(translucent)
+    if not translucent:
+        return
+    samples = "; ".join("%s %s=%s" % (_describe(element, position), prop,
+                                      _fmt_num(fraction))
+                        for position, (element, prop, fraction)
+                        in enumerate(translucent[:5], 1))
+    notes.append(
+        "%s: %d element%s paint with an opacity between 0 and 1 (%s). That is "
+        "not a failure -- a spot-colour screen prints a tint -- but the "
+        "rendered ink count may see the tints as extra inks, so check layer B's "
+        "number against the screens you agreed"
+        % (RULE_TRANSLUCENT, len(translucent),
+           "" if len(translucent) == 1 else "s", samples))
+
+
+def check_effects(root, styles, notes, stats):
+    """Report filter/mask/clip-path references once, as advice.
+
+    A filter can blur, flood or offset the ink; a mask can scale it away; a
+    clip path can cut it.  Layer A reads declarations, so it cannot measure any
+    of that -- which makes this an advisory in both layers, never a hard
+    finding.  The rendered proof (layer B) is where these become numbers.
+    """
+    referenced = _referenced_ids(root)
+    effects = []
+    for element, scope, _visibility in _walk_paint_scopes(root, styles,
+                                                          referenced):
+        if scope not in ("painted", "resource"):
+            continue
+        for prop in _EFFECT_PROPERTIES:
+            value, _source = styles.get(element, prop)
+            text = _paint_value(value)
+            if text and text.lower() not in ("none", "inherit", "initial",
+                                             "unset"):
+                effects.append((element, prop, text))
+
+    stats["effect_references"] = len(effects)
+    if not effects:
+        return
+    samples = "; ".join("%s %s=%s" % (_describe(element, position), prop,
+                                      _shorten(value, 40))
+                        for position, (element, prop, value)
+                        in enumerate(effects[:5], 1))
+    notes.append(
+        "%s: %d filter/mask/clip-path reference%s found (%s). Layer A cannot "
+        "measure what these do to the ink -- blur, flood, luminance or clipping "
+        "-- so this is reported rather than failed; layer B's rendered proof is "
+        "where the effect becomes visible, and a filter or mask that changes the "
+        "ink count is layer B's finding to make"
+        % (RULE_EFFECT, len(effects), "" if len(effects) == 1 else "s", samples))
+
+
+# --------------------------------------------------------------------------
 # Rule 3: minimum stroke width
 # --------------------------------------------------------------------------
 
-# Elements that never paint a stroke themselves.
-_NON_PAINTING = {"defs", "style", "metadata", "title", "desc", "script", "clipPath",
-                 "mask", "pattern", "marker", "filter", "linearGradient",
-                 "radialGradient", "symbol", "view", "cursor"}
-
-_NOT_STROKED_VALUES = ("none", "transparent", "inherit")
+_NOT_STROKED_VALUES = ("none", "transparent")
 
 
 def check_stroke_widths(root, styles, min_pt, failures,
                         mm_per_unit=MM_PER_USER_UNIT_DEFAULT, scale_desc=None):
-    """Check every stroked element's stroke-width against the minimum.
+    """Check every stroked shape's stroke-width against the minimum.
 
-    ``stroke`` and ``stroke-width`` are inherited properties, so the walk
-    carries the enclosing scope downwards: a <path> that picks up its stroke
-    from a parent <g> is still checked, using the width in force for it.
+    ``stroke``, ``stroke-width`` and ``stroke-opacity`` are inherited
+    properties, so each shape is resolved against its whole ancestor chain: a
+    <path> that picks up its stroke from a parent <g> is checked with the width
+    actually in force for it.
+
+    Only *shape* elements are reported.  A <g> carrying stroke-width paints
+    nothing itself, so reporting it as well would double-count one hairline; and
+    an element that cannot ink -- inside a <clipPath>, under display:none, with
+    stroke-opacity 0, or inside definition content nothing references -- is not
+    reported at all.  Those were the false MIN_STROKE_WIDTH findings (see the
+    module docstring for what is skipped and why).
 
     Widths are resolved against ``mm_per_unit`` -- the document's real
     user-unit scale -- so a viewBox-rescaled file is measured in true
     millimetres rather than an assumed 96dpi.  The basis is printed with each
     failure so the number can be checked by hand.
     """
+    referenced = _referenced_ids(root)
     counter = [0]
-    thin = []          # (label, points) for the capped summary below
+    thin = []          # (label, points, width_raw, width_source) for the summary
 
-    def visit(element, scope_stroke, scope_width):
-        name = _localname(element).lower()
+    for element, scope, _visibility in _walk_paint_scopes(root, styles,
+                                                          referenced):
+        if scope != "painted":
+            continue
+        if _localname(element).lower() not in _SHAPE_ELEMENTS:
+            continue
 
-        # Resolve the stroke actually in force for this element.
-        stroke_raw, _ = styles.get(element, "stroke")
-        if stroke_raw is None:
-            stroke_raw = scope_stroke[0]
-        stroke_text = (stroke_raw or "").strip()
-        stroking = bool(stroke_text) and stroke_text.lower() not in _NOT_STROKED_VALUES
+        stroke_raw, _stroke_source, _stroke_node = _inherited_value(
+            element, styles, "stroke", None)
+        stroke_text = _paint_value(stroke_raw)
+        if not stroke_text or stroke_text.lower() in _NOT_STROKED_VALUES:
+            continue
 
-        # Resolve the stroke width actually in force for this element
-        # (scope_width is the (value, source) pair inherited from the parent).
-        width_raw, width_source = styles.get(element, "stroke-width")
-        if width_raw is None:
-            width_raw, width_source = scope_width
+        # An invisible stroke is not a hairline: stroke-opacity:0 lays no ink.
+        stroke_opacity, _source, _node = _inherited_value(
+            element, styles, "stroke-opacity", "1")
+        fraction = _opacity_fraction(stroke_opacity)
+        if fraction is not None and fraction <= 0.0:
+            continue
+
+        width_raw, width_source, _width_node = _inherited_value(
+            element, styles, "stroke-width", None)
         if width_raw is None:
             width_raw, width_source = "1", "default (1px)"
+        elif width_source == "initial":
+            width_source = "default (1px)"
 
-        if stroking and name not in _NON_PAINTING:
-            counter[0] += 1
-            label = _describe(element, counter[0])
-            points, error = length_to_pt(width_raw, mm_per_unit)
-            if error:
-                failures.append((
-                    RULE_STROKE,
-                    "%s is stroked but its stroke-width %r cannot be used: %s"
-                    % (label, width_raw, error),
-                ))
-            elif points < min_pt:
-                thin.append((label, points, width_raw, width_source))
-
-        child_scope_stroke = (stroke_text,)
-        child_scope_width = (width_raw, width_source)
-        for child in element:
-            if isinstance(child.tag, str):
-                visit(child, child_scope_stroke, child_scope_width)
-
-    root_stroke, _ = styles.get(root, "stroke")
-    root_width, root_width_source = styles.get(root, "stroke-width")
-    visit(root, (root_stroke,), (root_width, root_width_source))
+        counter[0] += 1
+        label = _describe(element, counter[0])
+        points, error = length_to_pt(width_raw, mm_per_unit)
+        if error:
+            failures.append((
+                RULE_STROKE,
+                "%s is stroked but its stroke-width %r cannot be used: %s"
+                % (label, width_raw, error),
+            ))
+        elif points < min_pt:
+            thin.append((label, points, width_raw, width_source))
 
     # A hairline pattern repeated across a sheet produces one finding per path,
     # which buries the message. Report the first few in full, then summarise:
@@ -1124,36 +1917,29 @@ def check_stroke_scale_advisory(root, styles, notes, stats):
     failing the job (the real width cannot be computed without a full
     transform stack).
     """
-    counter = [0]
+    referenced = _referenced_ids(root)
     warned = []
 
-    def visit(element, scope_stroke):
-        name = _localname(element).lower()
-        stroke_raw, _ = styles.get(element, "stroke")
-        if stroke_raw is None:
-            stroke_raw = scope_stroke[0]
-        stroke_text = (stroke_raw or "").strip()
-        stroking = bool(stroke_text) and stroke_text.lower() not in _NOT_STROKED_VALUES
+    for element, scope, _visibility in _walk_paint_scopes(root, styles,
+                                                          referenced):
+        if scope != "painted":
+            continue
+        if _localname(element).lower() not in _SHAPE_ELEMENTS:
+            continue
+        stroke_raw, _source, _node = _inherited_value(element, styles,
+                                                      "stroke", None)
+        stroke_text = _paint_value(stroke_raw)
+        if not stroke_text or stroke_text.lower() in _NOT_STROKED_VALUES:
+            continue
+        if _has_scale_transform(element):
+            warned.append(element)
 
-        if stroking and name not in _NON_PAINTING:
-            counter[0] += 1
-            if _has_scale_transform(element):
-                label = _describe(element, counter[0])
-                warned.append(label)
-
-        for child in element:
-            if isinstance(child.tag, str):
-                visit(child, (stroke_text,))
-
-    root_stroke, _ = styles.get(root, "stroke")
-    visit(root, (root_stroke,))
-
-    for label in warned[:10]:
+    for position, element in enumerate(warned[:10], 1):
         notes.append(
             "%s: %s is stroked but a transform=scale() is in scope; the "
             "stroke-width is measured in user units and the scale is not "
             "applied, so the real stroke may be thinner than reported"
-            % (RULE_STROKE_SCALE, label))
+            % (RULE_STROKE_SCALE, _describe(element, position)))
     if len(warned) > 10:
         notes.append(
             "%s: ...and %d more stroked element%s with a scale transform "
@@ -1432,9 +2218,19 @@ def validate(svg_path, spec_path):
             failures.append((RULE_RASTER, "raster check crashed: %s: %s"
                              % (type(exc).__name__, exc)))
 
+    # allow_gradients was parsed and then never read, which let a gradient
+    # through the "source-level" gate entirely. It is enforced here, and the
+    # counts are recorded either way so the manifest shows what was there.
+    try:
+        check_gradients(root, styles, spec["allow_gradients"], failures, notes,
+                        stats, source=spec["allow_gradients_source"])
+    except Exception as exc:                          # noqa: BLE001
+        failures.append((RULE_GRADIENT, "gradient check crashed: %s: %s"
+                         % (type(exc).__name__, exc)))
+
     try:
         colour_count, colours = check_color_count(root, styles, spec["max_colors"],
-                                                  failures)
+                                                  failures, stats, notes)
         stats["color_count"] = colour_count
         stats["colors"] = sorted(colours)
     except Exception as exc:                          # noqa: BLE001
@@ -1453,6 +2249,15 @@ def validate(svg_path, spec_path):
     except Exception as exc:                          # noqa: BLE001
         notes.append("stroke scale advisory check crashed: %s: %s"
                      % (type(exc).__name__, exc))
+
+    # Advisory observations: notes by contract, so a crash here must never turn
+    # into a failure -- the findings they describe are unmeasurable by design.
+    for advisory in (check_translucency, check_effects, check_definition_coverage):
+        try:
+            advisory(root, styles, notes, stats)
+        except Exception as exc:                      # noqa: BLE001
+            notes.append("%s advisory check crashed: %s: %s"
+                         % (advisory.__name__, type(exc).__name__, exc))
 
     try:
         check_path_geometry(root, spec["allow_open_paths"], failures,
@@ -1478,6 +2283,7 @@ def validate(svg_path, spec_path):
 
     stats["allow_open_paths"] = spec["allow_open_paths"]
     stats["open_paths_source"] = spec["open_paths_source"]
+    stats["allow_gradients"] = spec["allow_gradients"]
     stats["print_method"] = spec["print_method"]
     stats["failures"] = len(failures)
     return failures, notes, stats
@@ -1533,6 +2339,7 @@ def _cli():
         $ python3 validate_svg.py logo.svg spec.json
         VALIDATION FAILED for logo.svg:
          - [RASTER_EMBED]: Found 1 embedded raster image but spec requires vector-only artwork (allow_raster_embed=false); Image #0 (no id) -> data:image/png;base64,iVBOR...
+         - [GRADIENT_NOT_ALLOWED]: 1 gradient definition found but geometry.allow_gradients is false (geometry.allow_gradients): this job is flat spot colour, so a gradient cannot be reproduced. Offenders: LinearGradient id='g' (id='g')
          - [COLOR_COUNT]: Color count 8 exceeds max 6 (used: #000000, #00ff00, #1a1a1a, #333333, #4d4d4d, #ffffff, #ff0000, silver)
          - [MIN_STROKE_WIDTH]: Path id='rule' has stroke-width 0.5pt, below minimum 1.5pt (stroke-width='0.5' from attr)
          - [OPEN_PATH]: Path id='outline' is not closed (1 open subpath starting at (10, 10))

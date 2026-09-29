@@ -22,6 +22,103 @@ is which candidate to print.
 - Recent, landed (see `git log`): the chopshop-im filter bench
   (`scripts/im_filters.py`), tune sweep and node-reduction driven from the spec,
   and the orphan sweep for artifacts of deleted jobs.
+- **Layer A now enforces the spec it claims to (landed, `validate_svg.py`).**
+  Seven reproduced gaps are closed. `geometry.allow_gradients` was parsed and
+  never read, so a two-stop gradient passed the "independent gate" with zero
+  findings — `--layer-a-only`, or `validation.run_preflight: false`, let
+  continuous tone through and only layer B's rendered ink count caught it; it is
+  now a hard failure (`GRADIENT_NOT_ALLOWED`, reported for both the declaration
+  and each `url(...)` paint site, including one that resolves to nothing).
+  Raster detection was `<image>`-only: `<feImage>` with a data/external href,
+  `<foreignObject>`, an external `<use>`/`<image>` and `url(data:image/...)` in
+  a style all passed as "vector-only" and are now `RASTER_EMBED`. The
+  non-painting skip matched camelCase set members (`clipPath`,
+  `linearGradient`, `radialGradient`) against a lowercased element name, so
+  they could never match and a stroked path inside a `<clipPath>` was reported
+  as a hairline; the sets and the lookup now share one case, and the skip covers
+  whole subtrees. Unreferenced `<defs>`/`<symbol>`/`<pattern>`/`<mask>`/`<marker>`
+  content (and anything under `display:none` / `visibility:hidden`) no longer
+  hard-fails: it is reported once as `UNCHECKED_DEFINITION` with a count, while
+  `<use>`-instantiated content is still checked. `!important` was stripped, so an
+  inline declaration always won; importance is now carried and ranked (inline
+  important > stylesheet important > inline normal > stylesheet normal >
+  presentation attribute). Implicit black fill and `currentColor` (resolved from
+  the inherited `color`, initial black) were not counted at all, so a black-fill
+  artwork read as using no ink; they are counted now. `stroke-opacity="0"`,
+  `opacity="0"`, `display:none` and `visibility:hidden` no longer trip
+  MIN_STROKE_WIDTH, and `filter`/`mask`/`clip-path` references are one
+  aggregated `EFFECT_REFERENCE` NOTE.
+  - Caveats: the advisory tags (`EFFECT_REFERENCE`, `TRANSLUCENT_PAINT`,
+    `UNCHECKED_DEFINITION`) are notes by contract, not entries in `failures` —
+    deliberately, because `preflight.classify()` fails safe to HARD for a rule it
+    does not know, so an advisory routed through `failures` would silently become
+    a hard gate. `preflight.py` is otherwise untouched.
+    The one integration gap this change had to close inside the frozen print
+    check was attribution, not severity: `preflight.LAYER_A_RULES` did not list
+    `GRADIENT_NOT_ALLOWED`, so the unified manifest labelled a SOURCE-level
+    failure `layer: render_preflight`. **Freeze lift, one line:** the change
+    owner lifted `AGENTS.md`'s freeze on `preflight.py` for that entry alone,
+    and `tests/test_preflight.py` now pins that every rule `validate_svg.py` can
+    RAISE maps to `LAYER_A` (the advisories excepted, being notes).
+    `snap_colors.py` was not touched.
+    Layer A still cannot prove the RENDERED result: it reads declarations, so an
+    allowed gradient contributes only its declared stops, and a blend, a font
+    substitution, a RIP thinning or an out-of-gamut colour remain layer B's job.
+    `snap_colors.py`'s own colour maths and `validate_svg.py`'s "Known
+    limitations" docstring section are the authoritative statements of what is
+    and is not covered.
+- **Artefact identity: every published artefact now names its artwork (landed).**
+  `pipeline.sh` publishes an artwork-scoped set next to the canonical flat names —
+  `05_final/<artwork>/<candidate>.{manifest.json,proof.png,print.pdf,layer_b.txt}`,
+  `04_validated/<artwork>.<candidate>.layer_a.txt` — and the run-unique copies are
+  now `<artwork>.<candidate>.<RUN_ID>.<ext>`; they previously carried no stem at
+  all, so a stamped artefact could not be traced back to anything. The flat
+  `05_final/<candidate>.manifest.json` is shared by every artwork whose trace
+  produced that candidate file stem, so `scripts/run_record.py` now prefers the
+  artwork-scoped name and, when it must fall back to the flat one, records
+  `"path_scope": "flat-shared"` on that artefact plus a candidate `anomalies`
+  note — a shared file is never recorded as if it were this run's. The preflight
+  scratch dir is per (artwork, candidate) (`.preflight-work/<artwork>/<candidate>/`)
+  instead of one shared `.preflight-work`, which two runs of the same candidate
+  stem used to race on. `front_pipeline.sh`'s `--sweep` now passes its value as
+  real argv (a bash array) and rejects a missing value with a usage error instead
+  of a `set -u` `$2: unbound variable`.
+  **Freeze lift, this change only:** `AGENTS.md:53` freezes `pipeline.sh` along
+  with `validate_svg.py`, `preflight.py` and `snap_colors.py`; the change's owner
+  lifted it for `pipeline.sh` for this fix. `snap_colors.py` was not touched.
+  The artwork stem is the containing directory's name (`runner.py` runs the back
+  half from `02_traced/<artwork>/`), falling back to the candidate's own stem for
+  a bare `00_source/art.svg`, so a hand-run in an ad-hoc directory takes that
+  directory's name — there is no `ARTWORK_STEM` override.
+- **The comparison grades the sweep's own record, not the directory (landed).**
+  `02_traced/<stem>` is shared and persistent per artwork stem, so a rerun with a
+  smaller cap or a different preset set used to leave the previous run's
+  higher-numbered `candidate_NN.svg` files on disk and have them graded as if this
+  sweep had produced them. `compare_candidates.py` now grades exactly the
+  `candidates` list in `sweep.json`; anything else matching `candidate_\d+\.svg`
+  is reported as a named NON-graded stale bucket (`stale_candidates`,
+  `stale_candidate_count`; a *Not graded (stale)* markdown table) and is never
+  rendered, measured or counted, and `graded_set_source` says `sweep.json` or
+  `glob`. The directory glob remains as a documented legacy fallback when
+  `sweep.json` is absent or unreadable. `trace_sweep.py` additionally prunes
+  `candidate_\d+\.svg` files it did not write, only AFTER a successful sweep,
+  leaving `sweep.json`, the checksum sidecars, `.variants/` and `.palette/`
+  alone, and records `stale_removed`. The record is the authority if the two ever
+  disagree. Candidate naming and the per-stem/continued-numbering behaviour are
+  unchanged.
+- **The im_filters bench is reproducible on any ImageMagick major (landed).**
+  The `-define png:exclude-chunk=date,time` the bench relied on is inert on
+  ImageMagick 6 (measured: 6.9.12 survives all three chunks), so
+  `test_parallel_matches_sequential` failed whenever a second boundary fell
+  inside the run. A documented post-pass (`strip_png_time_chunks`) now drops
+  exactly the `date:create`/`date:modify`/`date:timestamp` tEXt chunks from every
+  non-`identity` output; every other chunk (including profiles) and the pixel
+  data are copied through byte for byte. `-strip` is deliberately not used.
+  - Caveat: this box runs ImageMagick 7.1.1-43, where the old define already
+    worked and the test passed before and after. The fix removes the version
+    dependency by construction; the 6.x path was **not** observed on a real 6.x
+    build (none available here), only argued from the define's documented
+    semantics plus the synthetic-PNG unit test.
 - **Proof-variant dataset stage (landed, opt-in, OFF by default).**
   `scripts/proof_variants.py` derives a deterministic family of "similar copies"
   of one chosen proof (mirrored / rotated / colour-shifted) and writes the
@@ -111,12 +208,24 @@ is which candidate to print.
   test count — `README.md` and `docs/OVERVIEW.md` point here instead, because the
   number moves with every change and three stale copies were three chances to
   mislead. Verified on a full checkout with the repo venv:
-  `.venv/bin/python -m pytest tests -q` collects **774** and passes
-  **729 passed, 45 skipped**. Re-run it and update this line when you touch the
-  suite. (`AGENTS.md` still carries an older number — 400 — and it is owned by the
-  parent agent, not by this working-state file; an agent session CANNOT correct it,
-  because the write guard refuses edits to a protected agent-instruction file and
-  says not to route around it. It needs a human or an approved edit.)
+- **Suite count has one canonical home: this file.** No other document states a
+  test count — `README.md` and `docs/OVERVIEW.md` point here instead, because the
+  number moves with every change and three stale copies were three chances to
+  mislead. Verified on a full checkout with the repo venv:
+  `.venv/bin/python -m pytest tests -q` collects **853** and passed **853**
+  (0 skipped) on the merged tree — the two suites that produced this tree were
+  each measured on a checkout without the other's tests (842 for the
+  artefact/sweep/layer-A work, 774 collected / 729 passed + 45 skipped for the
+  published-names work), so re-measure rather than adding the numbers. Re-run it
+  and update this line when you touch the suite.
+  (`AGENTS.md`'s "Running tests" section used to carry a stale count — 400 — and
+  an agent session could not correct it, because the write guard refuses edits to
+  a protected agent-instruction file. The owner's direction on 2026-09-29 lifted
+  that for the count line and it now reads 763 — a SNAPSHOT, not the live number:
+  this file is the one to trust, and the two must not be allowed to disagree
+  silently again. The pass count is also environment-dependent in a way the
+  collected total is not: the same checkout has been observed at `853 passed` and
+  at `808 passed, 45 skipped`, so compare COLLECTED totals when judging drift.)
 
 - **Two Pythons, and the docs name only one.** `AGENTS.md:76` says "Python 3.13
   through a repo-root venv", which is TRUE of the container: the Dockerfile is
@@ -186,6 +295,34 @@ is which candidate to print.
   `AGENTS.md` keeps `snap_colors.py` off limits for edits — if that module ever
   learns a new paint property or colour source, compose's loop has to learn it
   too.
+- **`pipeline.sh` fails OPEN on an unparseable spec, and that is intended.** The
+  `run_preflight` probe falls back to `true` when `spec.json` is missing or cannot
+  be parsed, so Layer B (the render preflight) still runs. It is safe by
+  construction: a spec that cannot be parsed is not a spec a candidate can pass
+  Layer A against, so `validate_svg.py` fails the run on its own — the render can
+  cost time, never turn a bad run into a PASS. Do not "fix" this into a
+  fail-closed skip without re-confirming that Layer A still fails first.
+- **`05_final/<artwork>/` is never swept.** `orphan_sweep.py`'s columns are
+  `01_prepped/`, `02_traced/`, `04_validated/`, so the artwork-scoped copies in
+  `05_final/` accumulate exactly like the canonical flat names already did (see
+  the dataset-stage note above): they survive a job `DELETE` and the hourly sweep
+  cannot reclaim them. Deliberate for now — they are evidence, not cache — but a
+  long-lived box will want a policy.
+- **An unmeasured fidelity verdict reads as `faithful`.** `compare_candidates._fidelity_verdict`
+  returns `faithful` (rank 0, reason "artwork MAE n/a") whenever the fidelity
+  metric could not be measured, so a candidate nobody managed to score sorts
+  WITH the faithful ones rather than being held apart from them.
+  `tests/test_compare_candidates.py::test_unmeasured_fidelity_is_not_judged_artwork_lost`
+  pins only that it is not called `artwork_lost`, so nothing currently stops that
+  reading from being widened. If the distinction matters, it needs its own verdict
+  value — a deliberate code change, not a doc edit.
+- **The runner's `prep_expand` summary reaches no screen.** `GET /jobs/:id`
+  returns it (see `docs/runner-http-contract.md`) and the pipeline writes the bench
+  reports at the JOB ROOT (`prep-expand.json`/`.md`, `tune.json`/`.md`,
+  `tune-contact-sheet.png`, `node-reduce.json`, `filters.*`), so the bundle or the
+  file proxy by name is where you read them; the studio stores `prep_summary` but
+  has no column for `prep_expand`. The studio's contract docs state this rather
+  than promising a UI.
 
 ## Doc layout note (2026-09-28)
 

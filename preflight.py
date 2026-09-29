@@ -127,6 +127,13 @@ LAYER_A_RULES = frozenset({
     validate_svg.RULE_OPEN, validate_svg.RULE_SVG_PARSE,
     validate_svg.RULE_PATH_PARSE, validate_svg.RULE_NODES,
     validate_svg.RULE_PALETTE, validate_svg.RULE_DIMENSIONS,
+    # GRADIENT_NOT_ALLOWED is raised by validate_svg.py, so without this the
+    # unified manifest would label a SOURCE-level failure render_preflight --
+    # the severity was right (classify() fails safe to HARD for an unknown
+    # rule) and only the layer column lied.  Freeze lift, this one line:
+    # AGENTS.md freezes this file with the rest of the print check, and the
+    # change owner lifted it so a layer-A rule is attributed to layer A.
+    validate_svg.RULE_GRADIENT,
     # Cross-layer: either side can raise these, attributed to A as the origin.
     validate_svg.RULE_SPEC, validate_svg.RULE_INPUT,
 })

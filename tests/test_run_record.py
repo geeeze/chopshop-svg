@@ -31,8 +31,16 @@ def _write(path, content=b"x"):
     path.write_bytes(content if isinstance(content, bytes) else content.encode())
 
 
-def make_run(tmp_path, *, duplicate=False):
-    """Build a synthetic run and point run_record's constants at it."""
+def make_run(tmp_path, *, duplicate=False, scoped=False,
+             scoped_label="style_reference", stem="demo"):
+    """Build a synthetic run and point run_record's constants at it.
+
+    ``scoped`` also writes the artwork-scoped artefact set that pipeline.sh
+    publishes under ``05_final/<stem>/`` (and ``04_validated/<stem>.<cand>.*``),
+    with content that differs from the flat set so a test can tell which name the
+    record actually read.  Without it the layout is the pre-fix flat-only one,
+    which the fallback path still has to read.
+    """
     root = tmp_path / "proj"
     rr.SOURCE_DIR = root / "00_source"
     rr.PREPPED_DIR = root / "01_prepped"
@@ -40,7 +48,6 @@ def make_run(tmp_path, *, duplicate=False):
     rr.VALIDATED_DIR = root / "04_validated"
     rr.FINAL_DIR = root / "05_final"
 
-    stem = "demo"
     for d in (rr.SOURCE_DIR, rr.PREPPED_DIR, rr.TRACED_DIR / stem,
               rr.VALIDATED_DIR, rr.FINAL_DIR):
         d.mkdir(parents=True, exist_ok=True)
@@ -124,6 +131,25 @@ def make_run(tmp_path, *, duplicate=False):
                   {"selected": True, "label": "production", "reason": "clean"})
     _write(rr.FINAL_DIR / "candidate_01.visual_review.md", "# review")
 
+    # The artwork-scoped set pipeline.sh now publishes NEXT TO those flat names.
+    # Content deliberately differs per artwork, so a cross-artwork read shows up
+    # as a wrong hash / wrong label rather than as a silently plausible value.
+    if scoped:
+        scoped_dir = rr.FINAL_DIR / stem
+        scoped_dir.mkdir(parents=True, exist_ok=True)
+        scoped_manifest = dict(manifest)
+        scoped_manifest["notes"] = [f"scoped back half for {stem}"]
+        fc.write_json(scoped_dir / "candidate_01.manifest.json", scoped_manifest)
+        _write(scoped_dir / "candidate_01.proof.png", f"scoped proof {stem}")
+        _write(scoped_dir / "candidate_01.print.pdf", f"%PDF scoped {stem}")
+        _write(scoped_dir / "candidate_01.layer_b.txt", "scoped layer b")
+        _write(scoped_dir / "candidate_01.visual_review.md", "# scoped review")
+        fc.write_json(scoped_dir / "candidate_01.pick.json",
+                      {"selected": True, "label": scoped_label,
+                       "reason": f"scoped pick for {stem}"})
+        _write(rr.VALIDATED_DIR / f"{stem}.candidate_01.layer_a.txt",
+               f"scoped layer a {stem}")
+
     return root, stem, source_sha
 
 
@@ -176,6 +202,106 @@ def test_main_writes_run_json(tmp_path):
     data = json.loads(written.read_text())
     assert data["stem"] == stem
     assert len(data["candidates"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Artefact identity: the artwork-scoped name is this run's; the flat name is
+# shared by every artwork with that candidate file stem, so it is a flagged
+# fallback, never a silent read.
+# ---------------------------------------------------------------------------
+
+def test_artwork_scoped_artefacts_are_preferred(tmp_path):
+    """(1) When both names exist, the artwork-scoped set is what is recorded."""
+    _, stem, _ = make_run(tmp_path, scoped=True)
+    run = rr.build_run(stem)
+    c01 = next(c for c in run["candidates"] if c["id"] == "candidate_01")
+    back = c01["back_half"]
+    scoped_dir = rr.FINAL_DIR / stem
+
+    assert back["run"] is True
+    assert back["manifest"]["path"] == str(scoped_dir / "candidate_01.manifest.json")
+    assert back["manifest"]["path_scope"] == "artwork"
+    # Hash identity: the record read THIS artwork's file, not the flat sibling.
+    assert back["manifest"]["sha256"] == fc.sha256_file(
+        scoped_dir / "candidate_01.manifest.json")
+    assert back["manifest"]["sha256"] != fc.sha256_file(
+        rr.FINAL_DIR / "candidate_01.manifest.json")
+    assert back["proof_png"]["path_scope"] == "artwork"
+    assert back["proof_png"]["sha256"] == fc.sha256_file(
+        scoped_dir / "candidate_01.proof.png")
+    assert back["print_pdf"]["path_scope"] == "artwork"
+    assert back["layer_b_txt"]["path_scope"] == "artwork"
+    # Layer A's scoped name is a stem-prefixed sibling in 04_validated/, not a
+    # subdirectory, so the orphan sweep still keys it to the artwork.
+    assert back["layer_a_txt"]["path"] == str(
+        rr.VALIDATED_DIR / f"{stem}.candidate_01.layer_a.txt")
+    assert back["layer_a_txt"]["path_scope"] == "artwork"
+
+    # The human's pick and the visual review follow the same preference.
+    assert c01["human_decision"]["label"] == "style_reference"  # scoped, not flat "production"
+    assert c01["human_decision"]["path_scope"] == "artwork"
+    assert c01["visual_review"]["path_scope"] == "artwork"
+    assert c01["anomalies"] == []   # nothing fell back, so nothing to flag
+
+
+def test_flat_artefacts_are_read_but_flagged_not_attributable(tmp_path):
+    """(2) Flat-only (pre-fix) layout: readable, but marked as a shared name."""
+    _, stem, _ = make_run(tmp_path)      # flat names only
+    run = rr.build_run(stem)
+    c01 = next(c for c in run["candidates"] if c["id"] == "candidate_01")
+    c02 = next(c for c in run["candidates"] if c["id"] == "candidate_02")
+    back = c01["back_half"]
+
+    assert back["run"] is True
+    assert back["manifest"]["path"] == str(rr.FINAL_DIR / "candidate_01.manifest.json")
+    assert back["manifest"]["path_scope"] == "flat-shared"
+    assert back["layer_a_txt"]["path_scope"] == "flat-shared"
+    assert back["proof_png"]["path_scope"] == "flat-shared"
+    assert c01["human_decision"]["path_scope"] == "flat-shared"
+    assert c01["visual_review"]["path_scope"] == "flat-shared"
+
+    notes = " | ".join(c01["anomalies"])
+    assert "not attributable" in notes
+    assert "candidate_01.manifest.json" in notes
+    assert c01["missing_links"] == []   # readable data, not a failed stage
+
+    # A candidate with no back half at all is "absent", and gets no anomaly noise.
+    assert c02["back_half"]["manifest"]["path_scope"] == "absent"
+    assert c02["back_half"]["run"] is False
+    assert c02["anomalies"] == []
+
+
+def test_shared_candidate_name_does_not_cross_artworks(tmp_path):
+    """(3) Two artworks with the same candidate_01 must not read each other."""
+    make_run(tmp_path, scoped=True, stem="art_a", scoped_label="style_reference")
+    # art_b runs second: its flat names overwrite art_a's flat names, which is
+    # exactly the shared-state hazard the scoped set removes.
+    make_run(tmp_path, scoped=True, stem="art_b", scoped_label="needs_retrace")
+
+    run_a = rr.build_run("art_a")
+    run_b = rr.build_run("art_b")
+    a01 = next(c for c in run_a["candidates"] if c["id"] == "candidate_01")
+    b01 = next(c for c in run_b["candidates"] if c["id"] == "candidate_01")
+
+    a_manifest = rr.FINAL_DIR / "art_a" / "candidate_01.manifest.json"
+    b_manifest = rr.FINAL_DIR / "art_b" / "candidate_01.manifest.json"
+    assert a01["back_half"]["manifest"]["sha256"] == fc.sha256_file(a_manifest)
+    assert b01["back_half"]["manifest"]["sha256"] == fc.sha256_file(b_manifest)
+    assert a01["back_half"]["manifest"]["sha256"] != b01["back_half"]["manifest"]["sha256"]
+
+    # The picks differ per artwork; reading the flat pick would hand art_a art_b's.
+    assert a01["human_decision"]["label"] == "style_reference"
+    assert b01["human_decision"]["label"] == "needs_retrace"
+    flat_pick = json.loads((rr.FINAL_DIR / "candidate_01.pick.json").read_text())
+    assert flat_pick["label"] == "production"      # the shared flat file's own label
+    assert a01["human_decision"]["label"] != flat_pick["label"]
+    assert a01["human_decision"]["path"] == str(
+        rr.FINAL_DIR / "art_a" / "candidate_01.pick.json")
+    # Proofs are per-artwork too.
+    assert a01["back_half"]["proof_png"]["sha256"] == fc.sha256_file(
+        rr.FINAL_DIR / "art_a" / "candidate_01.proof.png")
+    assert a01["back_half"]["layer_a_txt"]["path"].endswith(
+        "art_a.candidate_01.layer_a.txt")
 
 
 def test_main_no_runs_exits_2(tmp_path):

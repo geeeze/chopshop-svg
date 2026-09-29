@@ -30,10 +30,10 @@ rendered proof you can look at and a print PDF you can hand over.
 This is the whole idea, and it came from measurement rather than reasoning:
 
 > **A two-stop gradient is written in the file as 2 colours and renders as
-> hundreds.** It passes every check that reads the file. It is unprintable as
-> spot colour.
+> hundreds.** Declared as two colours, painted as hundreds: unprintable as spot
+> colour, and every check that only *counts declarations* is blind to it.
 
-So a file can be structurally perfect and still not printable. Source-level
+So a file can be structurally perfect and still not be printable. Source-level
 checking is necessary but not sufficient — it cannot see what the artwork
 *renders as*. The system therefore runs two independent gates and reports both:
 
@@ -41,8 +41,8 @@ checking is necessary but not sufficient — it cannot see what the artwork
 |---|---|---|
 | Input | the SVG's attributes and CSS | the rasterised artwork |
 | Speed | fast, deterministic | slower (renders + measures) |
-| Sees | colour count, stroke widths, path closure, node counts, size, palette | rendered ink/screen count, continuous tone, ink coverage, placed-bitmap resolution |
-| Blind to | anything only visible in a render | anything invisible in pixels — a 0.85pt hairline renders as a normal line |
+| Sees | colour count, stroke widths, path closure, node counts, size, palette, raster embeds, **gradients and paint-server references when the spec bans them** | rendered ink/screen count, continuous tone, ink coverage, placed-bitmap resolution |
+| Blind to | anything only visible in a render (a filter's output, a blend, a font substitution) | anything invisible in pixels — a 0.85pt hairline renders as a normal line |
 
 Neither replaces the other, and **where they disagree is the interesting part**:
 
@@ -53,11 +53,24 @@ Neither replaces the other, and **where they disagree is the interesting part**:
 | photographic | FAIL (raster embed) | FAIL (continuous tone) | agree, for different reasons |
 | one-ink vector halftone | pass | pass | a dot field is binary in the render — correctly *not* "tone" |
 | fine line art (0.3mm rules) | **FAIL** | pass | **B cannot see stroke width** |
+| declared gradient, gradients disallowed | **FAIL** (`GRADIENT_NOT_ALLOWED`) | FAIL (ink count) | both now, for different reasons — see below |
 | fixture (all labelled violations) | FAIL | FAIL | 7 declared colours, 7 screens — agrees with the labels |
 
 The line-art row is the argument for keeping Layer A running: Layer B passes a
-file whose lines will break up on press. The gradient above is the argument for
-Layer B — a file that is clean on paper and unprintable in ink.
+file whose lines will break up on press.
+
+**The gradient is the reason the two gates must both run, and it also shows why
+the ban has to be enforced at the source.** A gradient is a promise the file
+cannot keep — 5 declared colours, 115 once rendered. Layer B's rendered ink
+count is what *proves* that. It used to be the only check that caught it: the
+source layer read `allow_gradients` and then consulted it nowhere, so a gradient
+passed the gate that claims to enforce the spec, and `--layer-a-only` (or a spec
+with `"validation": {"run_preflight": false}`) let continuous tone through
+entirely. With `"allow_gradients": false` a declared
+`<linearGradient>`/`<radialGradient>` or any paint-server reference
+(`url(#…)` in `fill`, `stroke`, `stop-color`, `flood-color` or
+`lighting-color`, wherever it is written) is now a **hard Layer A failure**.
+Layer B still supplies the evidence for why it matters.
 
 ---
 
@@ -75,16 +88,17 @@ Layer B — a file that is clean on paper and unprintable in ink.
    │                  │          │                      │
    │  reads the file  │          │  renders it:         │
    │  · raster embeds │          │  · Inkscape → proof  │
-   │  · colour budget │          │  · Inkscape → PDF    │
-   │  · stroke widths │          │  · counts inks       │
-   │  · open paths    │          │  · detects tone      │
-   │  · node counts   │          │  · CMYK separations  │
-   │  · size, palette │          │  · fonts, image ppi  │
+   │  · gradients     │          │  · Inkscape → PDF    │
+   │  · colour budget │          │  · counts inks       │
+   │  · stroke widths │          │  · detects tone      │
+   │  · open paths    │          │  · CMYK separations  │
+   │  · node counts   │          │  · fonts, image ppi  │
+   │  · size, palette │          │                      │
    └────────┬─────────┘          └──────────┬───────────┘
             │                               │
             └───────────────┬───────────────┘
                             ▼
-                  05_final/manifest.json
+                  05_final/<name>.manifest.json
                   (both layers, one record)
 ```
 
@@ -99,8 +113,8 @@ a hard finding**; advisories are reported and do not fail the run.
 | 1. Raster prep (background removal, upscaling) | `prep_raster.py` + `rembg`/Real-ESRGAN (optional) | **built** — trace stage, check-first |
 | 2. Vectorisation (tracing) | `trace_sweep.py` (VTracer) | **built** — trace stage |
 | 3. Cleanup & colour snapping | `snap_colors.py`, SVGO config | **built** (SVGO needs Node — unused here) |
-| 4. Source validation (Layer A) | `validate_svg.py` | **built, 91 tests** |
-| 4b. Render preflight (Layer B) | `preflight.py` | **built, 52 tests** |
+| 4. Source validation (Layer A) | `validate_svg.py` | **built** |
+| 4b. Render preflight (Layer B) | `preflight.py` | **built** |
 | 5. Creative review | you / the printer | **manual** |
 | 6. Export & handoff | `pipeline.sh` | **built** |
 
@@ -135,7 +149,7 @@ The contract for the job. A working default is provided; the important fields:
     "min_stroke_width_pt": 1.5,       // ≈0.53mm — thinnest line that survives
     "max_nodes_per_path": 500,        // tracing bloat
     "allow_raster_embed": false,      // photos allowed?
-    "allow_gradients": false,         // true only for CMYK process work
+    "allow_gradients": false,         // LAYER A enforces this: true only for CMYK process work
     "allow_open_paths": true          // derived from print_method if omitted
   },
   "print": {
@@ -192,9 +206,23 @@ ink-coverage figure are in `HOWTO-print-check.md`.
 
 Every run writes four things — a proof PNG, a print PDF, the JSON manifest
 (everything both gates found, with severities and the tool versions), and the
-Layer A result on its own. Per-run copies are kept, so consecutive runs never
-overwrite each other. The file table and the per-run naming are in
+Layer A result on its own. Each of the three `05_final/` artefacts is written
+under **three names**: the canonical flat one
+(`05_final/<candidate>.manifest.json`, what the runner and the studio read), an
+**artwork-scoped** one (`05_final/<artwork>/<candidate>.manifest.json`), and a
+**run-unique** copy carrying both stems
+(`05_final/<artwork>.<candidate>.<stamp>.manifest.json`); the Layer A log gets
+the flat and artwork-scoped pair (`04_validated/<candidate>.layer_a.txt`,
+`04_validated/<artwork>.<candidate>.layer_a.txt`). Consecutive runs never
+overwrite each other, and an artefact can always be traced back to the artwork it
+came from — the candidate stem alone cannot do that, because `candidate_04` is
+the same string for every artwork that ever traced one. The full file table is in
 `HOWTO-print-check.md`.
+
+The manifest is the run's record; the trace stage's own machine-readable
+artefacts — the candidate `comparison.json` and the stitched
+`06_run/<stem>.run.json` — are documented key by key in
+[`pipeline-schemas.md`](pipeline-schemas.md).
 
 With `"validation": {"variants": true}` in the spec the runner's print check
 also writes the **dataset set**: a deterministic family of similar copies of
@@ -213,9 +241,13 @@ Not everything reported deserves equal authority. **Only the hard gates fail
 the run**; everything else is reported and recorded in the manifest without
 failing it. In short, hard gates are the mechanical reasons a printer rejects a
 file (raster embeds, too many inks, hairlines, open paths on a cutting job, the
-wrong physical size, continuous tone on a spot-colour job), and advisories are
+wrong physical size, continuous tone on a spot-colour job, and — since the
+source layer stopped trusting the render layer to catch it — a gradient or a
+paint-server reference when the spec disallows them), and advisories are
 limits that cannot be enforced deterministically (RGB-derived ink coverage,
-non-embedded fonts, palette drift, node counts).
+non-embedded fonts, palette drift, node counts, filter/mask/clip-path
+references, partial opacity, and coverage skipped inside unreferenced
+definition content).
 
 The authoritative lists — every rule, its severity, and the setting that changes
 it — are in `HOWTO-print-check.md`.
@@ -255,14 +287,16 @@ against 0.00–0.20% for every flat file in the batch.
 ## Current state — what's verified
 
 **All tests passing** (`pytest tests/`), lint clean. The count is not repeated
-here: `../CONTEXT.md` is its single canonical home. The print check:
+here: `../CONTEXT.md` is its single canonical home (and the per-suite figures
+below intentionally carry no numbers for the same reason — they go stale the
+moment a rule lands). The print check's suites:
 
-| suite | tests | covers |
-|---|---|---|
-| `test_validate_svg.py` | 91 | every Layer A rule, unit scale, cascade, malformed input |
-| `test_preflight.py` | 52 | ink measurement, tone detection, gate classification, garment assumption |
-| `test_snap_colors.py` | 8 | colour snapping incl. CSS cascade writes |
-| `test_validate_svg_negative.py` | 4 | the four headline failure modes, as a standalone contract |
+| suite | covers |
+|---|---|
+| `test_validate_svg.py` | every Layer A rule, unit scale, cascade, malformed input |
+| `test_preflight.py` | ink measurement, tone detection, gate classification, garment assumption |
+| `test_snap_colors.py` | colour snapping incl. CSS cascade writes |
+| `test_validate_svg_negative.py` | the headline failure modes, as a standalone contract |
 
 The trace stage adds its own suites (prep, trace sweep, comparison, pick/loop,
 palette variants, run record, requirements closeout); see
@@ -396,6 +430,7 @@ validate_svg.py            Layer A — source validation
 preflight.py               Layer B — render preflight
 docs/HOWTO-print-check.md  practical usage guide + full settings table
 docs/OVERVIEW.md           this document
+docs/pipeline-schemas.md   the comparison.json and run.json shapes, key by key
 scripts/snap_colors.py     stage 3 — colour snapping
 scripts/svgo_print.yml     stage 3 — SVGO config (needs Node.js)
 scripts/run_batch.py       batch runner
@@ -410,8 +445,8 @@ tests/                     pytest suite (count: see ../CONTEXT.md)
 00_source/                 input artwork (+ the test batch)
 01_prepped/ 02_traced/ 03_cleaned/   stages 1–3 (trace stage writes 01/02)
 04_validated/              Layer A output + batch_results.json + comparison reports
-05_final/                  proof.png, print.pdf, manifest.json
-06_run/                    run-record JSON (archive spine)
+05_final/                  proof.png, print.pdf, manifest.json (+ per-artwork subdirs)
+06_run/                    run-record JSON (archive spine), + _learning/ event log
 ```
 
 ---

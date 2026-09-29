@@ -421,8 +421,12 @@ class TestRenderedColours:
     def test_gradient_is_caught_after_passing_layer_a(self, tmp_path, workdir):
         """The headline case from the v4.0 document.
 
-        A two-stop gradient is declared as 2 colours, so Layer A passes it. It
-        renders as hundreds, so Layer B must fail it.
+        This used to be the proof that Layer A *cannot* see a gradient: a
+        two-stop gradient is declared as 2 colours, so Layer A passed it and only
+        Layer B's rendered ink count failed it. Layer A now enforces
+        ``geometry.allow_gradients`` itself (GRADIENT_NOT_ALLOWED), so that is
+        asserted here instead -- and the rendered half still has to be Layer B's,
+        because a *declaration* is not an ink count.
         """
         svg = write_svg(tmp_path, "grad.svg", """  <defs>
     <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
@@ -435,8 +439,9 @@ class TestRenderedColours:
 
         layer_a_failures, _notes, stats_a = validate_svg.validate(svg, spec)
         assert stats_a["color_count"] == 2, stats_a.get("colors")
-        assert not layer_a_failures, (
-            "Layer A is expected to pass this file: %s" % layer_a_failures)
+        assert validate_svg.RULE_GRADIENT in {r for r, _ in layer_a_failures}, (
+            "Layer A must enforce geometry.allow_gradients, not leave the "
+            "gradient to Layer B: %s" % layer_a_failures)
 
         hard, _adv, stats_b, _notes = run(svg, spec, workdir)
         assert preflight.RULE_CONTINUOUS_TONE in rules(hard), (
@@ -685,6 +690,27 @@ class TestGateTable:
     def test_layers_are_attributed(self):
         assert preflight.layer_of(validate_svg.RULE_STROKE) == preflight.LAYER_A
         assert preflight.layer_of(preflight.RULE_CONTINUOUS_TONE) == preflight.LAYER_B
+
+    def test_layer_a_enforced_rule_is_attributed_to_layer_a(self):
+        """Layer A's own rules must not be labelled render_preflight.
+
+        GRADIENT_NOT_ALLOWED is raised by validate_svg.py.  Before it joined
+        LAYER_A_RULES the severity was still right -- classify() fails safe to
+        HARD for an unknown rule -- so the run failed correctly and only the
+        manifest's layer column lied, which is exactly the kind of wrong that
+        no failing test would report.  Pin the attribution for every rule
+        validate_svg.py can raise.
+        """
+        assert preflight.layer_of(validate_svg.RULE_GRADIENT) == preflight.LAYER_A
+        raised_by_layer_a = [
+            name for name in dir(validate_svg)
+            if name.startswith("RULE_") and name not in
+            ("RULE_STROKE_SCALE", "RULE_EFFECT", "RULE_TRANSLUCENT",
+             "RULE_UNCHECKED")
+        ]
+        for name in raised_by_layer_a:
+            rule = getattr(validate_svg, name)
+            assert preflight.layer_of(rule) == preflight.LAYER_A, name
 
 
 # --------------------------------------------------------------------------

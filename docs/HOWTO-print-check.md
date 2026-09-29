@@ -19,9 +19,26 @@ Exit code 0 means send the file. 1 means it lists what to fix. It writes:
 | `05_final/<name>.print.pdf` | The PDF for the printer. |
 | `05_final/<name>.manifest.json` | Everything both gates found, with severities. This is the record. |
 | `04_validated/<name>.layer_a.txt` | The source-level result on its own. |
+| `05_final/<name>.layer_b.txt` | The render-level result on its own (written when Layer B runs). |
+| `05_final/<artwork>/<name>.{manifest.json,proof.png,print.pdf,layer_b.txt}` | The same artefacts under the **artwork's** own stem — the artwork-scoped names. |
+| `04_validated/<artwork>.<name>.layer_a.txt` | The artwork-scoped Layer A log (a sibling in `04_validated/`, not a subdirectory). |
 
-Per-run copies are kept too (`05_final/<stamp>.proof.png`, where `<stamp>` is a
-timestamp + a few random bytes), so consecutive runs never overwrite each other.
+Per-run copies are kept too, and they carry **both** stems —
+`05_final/<artwork>.<name>.<stamp>.{manifest.json,proof.png,print.pdf}`, where
+`<stamp>` is a timestamp plus a few random bytes. Consecutive runs never
+overwrite each other.
+
+**Why three names.** `<name>` is the *candidate* file's stem. When the back half
+is run per candidate — `02_traced/<artwork>/candidate_04.svg`, which is how the
+runner invokes it — that stem is `candidate_04`, the same string for every
+artwork that ever traced one. `05_final/candidate_04.manifest.json` is therefore
+shared: a later artwork's run record could read an earlier artwork's manifest,
+proof and human pick with nothing in the name to say so. The canonical flat names
+stay (the runner and the studio are built on them); the artwork-scoped and
+both-stem run-unique names are what make an artefact attributable, and
+`run_record.py` prefers the artwork-scoped one, flagging any fallback to a flat
+name as `"path_scope": "flat-shared"`.
+
 Open the artwork by hand with `inkscape 00_source/your-artwork.svg`.
 
 Options: `./pipeline.sh file.svg --dpi=300` overrides resolution;
@@ -99,8 +116,18 @@ Both run every time. Neither replaces the other, and where they disagree is
 informative:
 
 > A two-stop gradient is **2 colours** in the file and **hundreds** once
-> rendered. Layer A passes it; Layer B fails it. Declaring a gradient is not the
-> same as printing one.
+> rendered. Layer B measures the hundreds. Layer A refuses the file outright
+> when the spec disallows gradients — so `--layer-a-only` meets the same ban,
+> instead of the ban existing only where a renderer was available.
+
+Layer A's gradient gate: with `"allow_gradients": false` (the default) a
+declared `<linearGradient>`/`<radialGradient>` **or** any paint-server reference
+— `url(#…)` in `fill`, `stroke`, `stop-color`, `flood-color` or `lighting-color`,
+whether written as an attribute, in a `style="…"` or in a `<style>` block — is a
+hard failure tagged `GRADIENT_NOT_ALLOWED`. A `url(…)` that resolves to nothing
+in the file is reported too: "this paints with something I cannot read" is never
+a silent pass. With `"allow_gradients": true` nothing fails and a gradient's
+`<stop>` colours are counted towards the colour budget.
 
 A file can also pass Layer B and fail Layer A: a 0.85pt hairline renders as a
 perfectly ordinary line, so only the source check can see that it will break up
@@ -114,17 +141,32 @@ Not everything reported should be treated with equal authority. The manifest
 records which is which, and **only hard gates fail the run**.
 
 **Hard gates** — the file cannot be printed as specified:
-raster embeds when disallowed · too many inks (declared *or* rendered) · strokes
-below the minimum · open paths on a cutting job · zero-area shapes · malformed
-SVG · placed images below the resolution floor · CMYK demanded but the output
-isn't · the wrong physical size · continuous tone on a spot-colour job.
+raster embeds when disallowed (an `<image>` anywhere, an `<feImage>` with a
+data/file/external href, a `<foreignObject>`, an `<image>`/`<use>` pointing at
+another document, or a `url(data:image/…)` in a style) · gradients and
+paint-server references when the spec disallows them · too many inks (declared
+*or* rendered) · strokes below the minimum · open paths on a cutting job ·
+zero-area shapes · malformed SVG · placed images below the resolution floor ·
+CMYK demanded but the output isn't · the wrong physical size · continuous tone
+on a spot-colour job.
 
 **Advisory** — reported, does not fail:
 RGB-derived ink coverage (it cannot be trusted as a limit — see below) ·
 non-embedded fonts (set `"require_embedded_fonts": true` to make it a gate) ·
 paths with more nodes than the limit · colours outside the palette ·
 continuous tone when `gradient_handling` is `embedded_raster`, where smooth tone
-is expected rather than a mistake.
+is expected rather than a mistake · `EFFECT_REFERENCE` (a `filter`, `mask` or
+`clip-path` reference — the source layer cannot measure what a blur or a flood
+does to the ink) · `TRANSLUCENT_PAINT` (an opacity between 0 and 1: a spot-colour
+screen prints a tint, but the rendered ink count may see two tints as two inks) ·
+`UNCHECKED_DEFINITION` (shape elements inside `<defs>`/`<symbol>`/`<pattern>`
+that nothing references were not stroke- or colour-checked, so coverage of the
+file is partial).
+
+Those last three are written to the report's **notes**, never to its failures.
+That matters beyond tidiness: an unrecognised rule tag is treated as **hard** by
+the gate classifier, so an advisory routed through failures would silently become
+a hard gate on artwork that is fine.
 
 ---
 
@@ -154,7 +196,11 @@ real files, and both matter:
 **2. Tone.** Gradients and photographs are flagged `CONTINUOUS_TONE`. They need
 halftone screening, which means process (CMYK) printing, not spot colours. If
 your printer *is* doing CMYK process work, set `"allow_gradients": true` and
-this stops being an error.
+this stops being an error. The same key is enforced by the **source** layer as
+`GRADIENT_NOT_ALLOWED`, before anything is rendered: with gradients disallowed, a
+declared gradient or any `url(…)` paint reference fails the file even under
+`--layer-a-only`. Declaring a gradient is not the same as printing one, and the
+file is not allowed to declare one it cannot print.
 
 **3. Ink coverage.** How much ink is on the darkest part of the sheet, summed
 across the four plates. Above the limit the ink doesn't dry and the sheets stick
@@ -164,10 +210,21 @@ together. Default limit 300%.
 printer and your layout shifts. Images placed at too low a resolution print
 visibly soft — a 240×320 bitmap stretched across a shirt measures 30 ppi.
 
-**5. Source-level problems.** Raster images embedded when they shouldn't be, too
-many colours declared, hairline strokes that will break up, paths left open,
-shapes enclosing no area, traced outlines bloated with thousands of nodes,
-artwork that is the wrong size, colours off the agreed palette.
+**5. Source-level problems.** Bitmaps reaching the artwork in any form — an
+`<image>` (even inside a `<pattern>`), an `<feImage>` with a data/file/external
+href, a `<foreignObject>` (which rasterises XHTML), a `<use>`/`<image>` pointing
+at another document, or a `url(data:image/…)` in a style — too many colours
+declared, gradients or paint-server references when the spec disallows them,
+hairline strokes that will break up, paths left open, shapes enclosing no area,
+traced outlines bloated with thousands of nodes, artwork that is the wrong size,
+colours off the agreed palette.
+
+The declared colour count is a count of **declarations**, not of final pixels, and
+it includes the ones an attribute-by-attribute reading misses: a shape whose
+cascade never sets `fill` is painted black and counts as `#000000`, and
+`fill="currentColor"` counts as whatever the inherited `color` resolves to (black
+when nothing declares one). A colour a later rule overrides still occupies a slot.
+So a budget can fail on a file whose visible palette looks smaller than the limit.
 
 ---
 

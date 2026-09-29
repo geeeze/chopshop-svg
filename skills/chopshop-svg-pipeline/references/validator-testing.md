@@ -30,6 +30,19 @@ are reported (a validator that stops at the first failure is a workflow bug).
 - **Open paths in stroke fixtures.** A fixture with `d="M0,0 L10,10"` also
   trips the open-path rule; close it (`... Z`) when the case is about stroke
   width, or the assertion fails for an unrelated reason.
+- **A fragment written without a root.** A "document" of bare `<path …/>` has
+  `<path>` as its ROOT, so the validator answers `root element is <path>,
+  expected <svg>` (or `Extra content at the end of the document` when the body
+  has two siblings). Both the pytest fixtures and the standalone probe must wrap
+  a fragment in `<svg>`; when every case in a batch reports the same parse error,
+  suspect the fixture generator before reading anything into the result. The
+  probe decides by the body's root element (`svg`/`html` = a whole document) and
+  puts a leading BOM *before* the wrapper.
+- **A rule that is advisory can be made to look hard by where it is routed.**
+  `preflight.classify()` fails safe to HARD on an unrecognised tag, so a
+  case asserting "this must not fail" is worth having for every advisory:
+  a note routed through `failures` turns it into a gate the moment the
+  classification reaches a layer that does not know the tag.
 
 ## Thresholds need both directions
 

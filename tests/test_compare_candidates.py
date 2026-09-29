@@ -366,3 +366,182 @@ def test_faithful_candidates_sort_above_artwork_lost():
     key = lambda c: (c["hard"], rank.get(c.get("fidelity_verdict"), 2),
                      c["advisory"], c["fidelity"]["mae_art"])
     assert sorted([lost, good], key=key)[0] is good
+
+
+# ---------------------------------------------------------------------------
+# Sweep ownership: what gets graded is the sweep's record, not the directory
+#
+# 02_traced/<stem> is shared per stem and persists across runs, so a rerun with
+# a smaller cap (or a different preset/speckle set) leaves the previous run's
+# higher-numbered candidates on disk.  Globbing the directory graded them as
+# though THIS sweep had produced them -- with the old sweep's parameters, or
+# none at all once sweep.json had been replaced by a smaller record.  These
+# pin the fix: sweep.json's `candidates` list is the graded set, and anything
+# else matching candidate_\d+\.svg is reported as stale and NOT graded.
+# ---------------------------------------------------------------------------
+
+_INK_POOL = ["#000000", "#ffffff", "#ff0000", "#00ff00", "#0000ff", "#ffff00"]
+
+
+def _svg_with_inks(inks):
+    """An SVG declaring exactly `inks` distinct fill colours."""
+    body = "".join('<rect x="%d" y="%d" width="8" height="8" fill="%s"/>'
+                   % (10 * index, 10 * index, colour)
+                   for index, colour in enumerate(inks))
+    return SVG_HEAD + body + "</svg>"
+
+
+def _make_shrunk_rerun_dir(tmp_path, recorded=3, on_disk=6, with_sweep=True):
+    """A traced dir holding `on_disk` candidates with a record naming only the
+    first `recorded` -- the exact state a smaller rerun leaves behind."""
+    traced = tmp_path / "traced" / "art"
+    traced.mkdir(parents=True)
+    for index in range(1, on_disk + 1):
+        (traced / ("candidate_%02d.svg" % index)).write_text(
+            _svg_with_inks(_INK_POOL[:index]), encoding="utf-8")
+    if with_sweep:
+        (traced / "sweep.json").write_text(json.dumps({
+            "tool": "trace_sweep.py",
+            "candidates": [
+                {"file": "candidate_%02d.svg" % index, "preset": "bw",
+                 "filter_speckle": 2, "hierarchical": "cutout",
+                 "use_palette": False, "params": {}}
+                for index in range(1, recorded + 1)],
+        }), encoding="utf-8")
+    return str(traced)
+
+
+def test_smaller_rerun_grades_only_the_recorded_candidates(tmp_path):
+    """sweep.json names 3; 6 files are on disk. Exactly 3 are graded."""
+    traced = _make_shrunk_rerun_dir(tmp_path, recorded=3, on_disk=6)
+    spec = make_spec(tmp_path)
+    code, out_dir = _run(tmp_path, traced, spec)
+
+    assert code == 0
+    payload = json.load(open(os.path.join(out_dir, "art.comparison.json"),
+                             encoding="utf-8"))
+    graded = [c["file"] for c in payload["candidates"]]
+    assert len(graded) == 3
+    assert graded == ["candidate_01.svg", "candidate_02.svg",
+                      "candidate_03.svg"]
+    assert payload["candidate_count"] == 3
+    assert payload["graded_set_source"] == "sweep.json"
+
+    # ...and the three it did not produce are REPORTED, not graded and not
+    # silently dropped: a named bucket in the JSON, and none of their metrics
+    # anywhere in the graded records.
+    assert payload["stale_candidates"] == ["candidate_04.svg",
+                                          "candidate_05.svg",
+                                          "candidate_06.svg"]
+    assert payload["stale_candidate_count"] == 3
+
+    # The graded metrics belong to the recorded three, and only those: the
+    # candidates' own declared ink counts prove the stale files were not run
+    # through the layers (if candidate_04..06 had been graded, declared would
+    # reach 6).
+    declared = sorted(c["declared_colors"] for c in payload["candidates"])
+    assert declared == [1, 2, 3]
+
+
+def test_stale_candidates_are_named_in_the_markdown_table(tmp_path):
+    """A stale file must be visible to a human reading the report, and called
+    out as NOT graded, or the table looks like a complete sweep."""
+    traced = _make_shrunk_rerun_dir(tmp_path, recorded=3, on_disk=6)
+    spec = make_spec(tmp_path)
+    code, out_dir = _run(tmp_path, traced, spec)
+    assert code == 0
+
+    md = open(os.path.join(out_dir, "art.comparison.md"),
+              encoding="utf-8").read()
+    assert "candidate_04.svg" in md
+    assert "candidate_06.svg" in md
+    assert "Not graded" in md
+    # and the count line agrees with the graded set, not the directory
+    assert "- candidates: 3" in md
+
+
+def test_without_a_sweep_record_every_candidate_on_disk_is_graded(tmp_path):
+    """The legacy path: no usable record -> the old directory glob, unchanged.
+
+    An old traced dir (or one built by hand) still compares; with nothing to
+    call stale, there is no stale bucket.
+    """
+    traced = _make_shrunk_rerun_dir(tmp_path, on_disk=6, with_sweep=False)
+    spec = make_spec(tmp_path)
+    code, out_dir = _run(tmp_path, traced, spec)
+
+    assert code == 0
+    payload = json.load(open(os.path.join(out_dir, "art.comparison.json"),
+                             encoding="utf-8"))
+    assert payload["candidate_count"] == 6
+    assert payload["graded_set_source"] == "glob"
+    assert payload["stale_candidates"] == []
+    assert sorted(c["file"] for c in payload["candidates"]) == [
+        "candidate_%02d.svg" % index for index in range(1, 7)]
+
+
+def test_a_sweep_record_without_a_candidates_list_falls_back_to_the_glob(tmp_path):
+    """Unreadable/non-record sweep.json is the legacy path, not an empty set."""
+    traced = tmp_path / "traced" / "art"
+    traced.mkdir(parents=True)
+    for index in range(1, 4):
+        (traced / ("candidate_%02d.svg" % index)).write_text(
+            _svg_with_inks(_INK_POOL[:index]), encoding="utf-8")
+    (traced / "sweep.json").write_text(json.dumps({"tool": "something-else"}),
+                                       encoding="utf-8")
+
+    candidates, _payload, stale, source = compare_candidates.load_candidates(
+        str(traced))
+    assert source == "glob"
+    assert len(candidates) == 3
+    assert stale == []
+
+
+def test_a_recorded_candidate_missing_from_disk_is_still_graded(tmp_path):
+    """The record is the graded set -- a listed name is never quietly dropped.
+
+    Its layers report the failure; what must NOT happen is the name vanishing
+    so the report looks like a clean 3-candidate sweep.
+    """
+    traced = tmp_path / "traced" / "art"
+    traced.mkdir(parents=True)
+    for index in (1, 2):
+        (traced / ("candidate_%02d.svg" % index)).write_text(
+            _svg_with_inks(_INK_POOL[:index]), encoding="utf-8")
+    (traced / "sweep.json").write_text(json.dumps({
+        "candidates": [{"file": "candidate_%02d.svg" % index, "preset": "bw",
+                        "params": {}} for index in (1, 2, 9)],
+    }), encoding="utf-8")
+
+    spec = make_spec(tmp_path)
+    code, out_dir = _run(tmp_path, str(traced), spec)
+    assert code == 0
+    payload = json.load(open(os.path.join(out_dir, "art.comparison.json"),
+                             encoding="utf-8"))
+    graded = [c["file"] for c in payload["candidates"]]
+    assert "candidate_09.svg" in graded
+    assert payload["stale_candidates"] == []
+    missing = next(c for c in payload["candidates"]
+                   if c["file"] == "candidate_09.svg")
+    assert missing.get("error") or missing["layer_b"]["status"] != "pass"
+
+
+def test_zero_graded_with_stale_files_reports_them(tmp_path):
+    """An empty record must not lazily grade the leftovers it replaced."""
+    traced = tmp_path / "traced" / "art"
+    traced.mkdir(parents=True)
+    (traced / "candidate_01.svg").write_text(_svg_with_inks(_INK_POOL[:1]),
+                                             encoding="utf-8")
+    (traced / "sweep.json").write_text(json.dumps({"candidates": []}),
+                                       encoding="utf-8")
+
+    spec = make_spec(tmp_path)
+    code, out_dir = _run(tmp_path, str(traced), spec)
+    assert code == 0
+    payload = json.load(open(os.path.join(out_dir, "art.comparison.json"),
+                             encoding="utf-8"))
+    assert payload["candidate_count"] == 0
+    assert payload["stale_candidates"] == ["candidate_01.svg"]
+    md = open(os.path.join(out_dir, "art.comparison.md"),
+              encoding="utf-8").read()
+    assert "candidate_01.svg" in md

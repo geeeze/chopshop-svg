@@ -9,8 +9,8 @@ spot the other covers, and the disagreements are the useful signal.
 |---|---|---|
 | Input | the SVG attributes and cascade | the rasterised artwork |
 | Speed | fast, deterministic | slower, needs Inkscape + Ghostscript |
-| Sees | declared colours, stroke widths, path closure, node counts, size, palette | rendered ink count, continuous tone, ink coverage, placed-ppi |
-| Blind to | anything only a render shows (gradients, tone) | anything not visible in pixels (a 0.85pt hairline renders fine) |
+| Sees | declared colours, stroke widths, path closure, node counts, size, palette, raster embeds, declared gradients / paint-server references | rendered ink count, continuous tone, ink coverage, placed-ppi |
+| Blind to | anything only a render shows (a filter's output, a blend, a font substitution) | anything not visible in pixels (a 0.85pt hairline renders fine) |
 
 ## Where they disagree (measured, 300x400mm shirt artwork at 300 dpi)
 
@@ -21,10 +21,17 @@ spot the other covers, and the disagreements are the useful signal.
 | photographic | FAIL (raster embed) | FAIL (continuous tone) | agree, different reasons |
 | one-ink vector halftone | pass | pass | a dot field is binary in the render, correctly not "tone" |
 | fine line art, 0.3mm rules | FAIL (hairline) | pass | **B cannot see stroke width** |
+| declared gradient, gradients disallowed | FAIL (gradient) | FAIL (ink count) | both now, for different reasons |
 | 300mm/300-unit viewBox | pass | pass | would have failed before viewBox-aware units |
 
-Two of these are the whole argument for running both gates. The line-art file
-fails A and passes B; a two-stop gradient does the reverse.
+The line-art row is the argument for running both gates. The gradient row is the
+argument for enforcing the spec at the source: `geometry.allow_gradients: false`
+used to be read by nothing, so a two-stop gradient passed Layer A with **zero**
+findings and only the rendered ink count caught it — and `--layer-a-only`, or a
+spec with a preflight skip, lost even that. It is now a hard Layer A failure
+(`GRADIENT_NOT_ALLOWED`) on a declared gradient *or* any paint-server reference,
+and Layer B remains the layer that says *why* (5 declared colours → 115
+rendered).
 
 ## Facts only the source knows
 
@@ -82,15 +89,28 @@ light-fabric default is a silent undercount on every dark-garment job.
 
 Only hard findings should fail a job, or people learn to ignore the tool.
 
-**Hard:** raster embeds when disallowed, declared or rendered colour count over
-budget, stroke below minimum, open paths on a cutting job, zero-area shapes,
+**Hard:** raster embeds when disallowed (the whole family — `<image>`,
+`<feImage>` with a data/file/external href, `<foreignObject>`, a `<use>`/`<image>`
+naming another document, a `url(data:image/…)` in a style), gradients and
+paint-server references when the spec bans them, declared or rendered colour count
+over budget, stroke below minimum, open paths on a cutting job, zero-area shapes,
 malformed SVG, placed bitmap below the ppi floor, wrong physical size, CMYK
 demanded but absent, continuous tone on a spot-colour job.
 
 **Advisory:** RGB-derived TAC (it cannot fire a 300% limit — see below),
-non-embedded fonts by default, path node counts, off-palette colours, and
-continuous tone when `gradient_handling` is `embedded_raster` (smooth tone is
-the plan there, not a mistake).
+non-embedded fonts by default, path node counts, off-palette colours, continuous
+tone when `gradient_handling` is `embedded_raster` (smooth tone is the plan
+there, not a mistake), and three Layer A observations that describe what a
+declaration reader cannot measure: `EFFECT_REFERENCE` (filter/mask/clip-path),
+`TRANSLUCENT_PAINT` (0 < opacity < 1) and `UNCHECKED_DEFINITION` (coverage
+skipped inside unreferenced definition content).
+
+**Advisories are written to `notes`, never to `failures`, and that is
+load-bearing.** `validate_svg.main` exits 1 on any entry in `failures`, and the
+gate classifier fails **SAFE TO HARD** for a rule tag it does not recognise — so
+an advisory routed through failures becomes a silent hard gate in the other
+layer. An unmeasurable observation belongs in the advisory count, with the
+rendered proof as its evidence.
 
 ## Manifest
 
@@ -99,13 +119,25 @@ severity, the artifacts, and the tool versions — a result is uninterpretable
 months later without the Ghostscript version. Write it from the orchestrator so
 there is exactly one copy.
 
-Artifact naming: write `<stem>.proof.png` / `<stem>.print.pdf` /
-`<stem>.manifest.json` as the canonical per-job names, **plus a run-unique
-stamped copy** (`<YYYYmmdd-HHMMSS>-<4 random hex>.proof.png`, etc.). Never write a
-fixed plain name (`proof.png` / `manifest.json`) — consecutive runs silently
-overwrite each other, which is why the user asked for stamping. The stamped copy
-keeps a single-job handoff convenient; the run stamp means a batch never has one
-job clobber another.
+Artifact naming: write the canonical **flat** names
+(`<candidate>.proof.png` / `.print.pdf` / `.manifest.json` / `.layer_b.txt`) —
+the operator front end and the studio are built on them — **plus two
+attributable families**: the artwork-scoped names
+(`05_final/<artwork-stem>/<candidate>.…`, and the sibling
+`04_validated/<artwork-stem>.<candidate>.layer_a.txt`) and a run-unique copy
+carrying **both** stems
+(`05_final/<artwork-stem>.<candidate>.<YYYYmmdd-HHMMSS>-<4 random hex>.…`).
+
+Never write a fixed plain name (`proof.png` / `manifest.json`) — consecutive runs
+silently overwrite each other, which is why the user asked for stamping. And
+never rely on the flat name alone: `<candidate>` is the input file's stem, so
+`candidate_04` is the same string for **every** artwork that ever traced one, and
+`05_final/candidate_04.manifest.json` is shared state that says nothing about
+which artwork it belongs to. Consumers prefer the artwork-scoped name and mark any
+fallback to a flat one (`run_record.py` records `"path_scope": "flat-shared"` and
+an `anomalies` note). Layer B's scratch directory is per (artwork, candidate)
+too, because preflight unlinks and refills its workdir — two runs sharing one
+directory race on `flattened.pdf`.
 
 ## Batch design
 

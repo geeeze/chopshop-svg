@@ -4,13 +4,19 @@
 test_validate_svg.py -- pytest suite for validate_svg.py.
 
 Covers one passing document and every failure mode the validator must catch:
-raster embeds (plain <image> and <image> inside <pattern>), colour budget,
-minimum stroke width (with unit conversion), open paths, zero-area /
-zero-length shapes, and malformed XML.
+raster embeds (plain <image>, <image> inside <pattern>, <feImage>,
+<foreignObject>, an external <use>, a data: URL in a style), the gradient gate,
+colour budget, minimum stroke width (with unit conversion), open paths,
+zero-area / zero-length shapes, malformed XML, the CSS cascade (including
+``!important``), implicit and inherited paint, opacity, effect references and
+non-painting subtrees.
 
-Every test drives the real CLI entry point (``validate_svg.main``) and asserts
-on both the exit code and the exact rule tag printed to stdout, so the tests
-fail if the output contract drifts, not just if the logic does.
+Every test up to section 9 drives the real CLI entry point
+(``validate_svg.main``) and asserts on both the exit code and the exact rule tag
+printed to stdout, so the tests fail if the output contract drifts, not just if
+the logic does. Section 10 drives ``validate()`` directly, because a rule that
+must *not* fire is easier and more precisely asserted on the returned failures
+and stats than on stdout.
 
 Run with:  python3 -m pytest test_validate_svg.py -v
 """
@@ -20,7 +26,14 @@ import sys
 
 import pytest
 
-from validate_svg import main
+import validate_svg
+from validate_svg import main, validate
+
+# Rules asserted on directly, imported so a rename cannot pass silently.
+RULE_GRADIENT = validate_svg.RULE_GRADIENT
+RULE_EFFECT = validate_svg.RULE_EFFECT
+RULE_TRANSLUCENT = validate_svg.RULE_TRANSLUCENT
+RULE_UNCHECKED = validate_svg.RULE_UNCHECKED
 
 # --------------------------------------------------------------------------
 # Fixtures / helpers
@@ -133,6 +146,12 @@ class TestRasterEmbeds:
         )
         out = assert_failure(capsys, svg, spec_file(), "RASTER_EMBED")
         assert "inside <pattern>" in out
+        # `fill="url(#p)"` is a paint-server reference, and gradients are banned
+        # by default, so the paint site is reported too -- deliberately: this
+        # document paints with a server whose colours a flat-colour job cannot
+        # reproduce, which is the same defect a gradient is (see GRADIENT_NOT_ALLOWED
+        # in the module docstring).
+        assert "[GRADIENT_NOT_ALLOWED]" in out, out
 
     def test_multiple_images_counted(self, capsys, svg_file, spec_file):
         body = "".join('<image x="0" y="0" width="1" height="1" href="%d.png"/>' % i
@@ -911,6 +930,465 @@ class TestPrintMethod:
         path = tmp_path / "s2.json"
         path.write_text(json.dumps(spec), encoding="utf-8")
         assert main([str(svg), str(path)]) == 0, capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------
+# 10. The source-level gate has to enforce what the spec says.
+#
+# Each of the seven gaps below was reproduced on this box with the strict spec
+# (max_colors 6, allow_raster_embed false, allow_gradients false,
+# min_stroke_width_pt 1.5): a gradient passed with zero findings, an <feImage> /
+# <foreignObject> / external <use> passed as "vector-only", a stroked path
+# inside <clipPath> was reported as a hairline, definition content raised
+# findings on art that cannot print, !important lost to the cascade, a bare
+# <path> counted as no ink, and an invisible stroke failed the minimum width.
+#
+# These tests drive ``validate()`` directly so they assert on the exact rule and
+# on stats, not on stdout formatting.
+# --------------------------------------------------------------------------
+
+def rules(failures):
+    return [rule for rule, _detail in failures]
+
+
+def details(failures, rule):
+    return [detail for r, detail in failures if r == rule]
+
+
+def notes_text(notes):
+    return "\n".join(notes)
+
+
+class TestGradientsAreEnforced:
+    """V1: geometry.allow_gradients was parsed and never read."""
+
+    def _gradient_doc(self, paint='fill="url(#g)"'):
+        return (
+            '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="0">'
+            '<stop offset="0" stop-color="#ff0000"/>'
+            '<stop offset="1" stop-color="#00ff00"/></linearGradient></defs>'
+            '<rect width="10" height="10" %s/>' % paint
+        )
+
+    def test_gradient_definition_is_a_hard_failure(self, svg_file, spec_file):
+        svg = svg_file(self._gradient_doc())
+        failures, _notes, stats = validate(svg, spec_file())
+        assert RULE_GRADIENT in rules(failures), failures
+        assert stats["gradient_definitions"] == 1
+        assert stats["gradient_paint_references"] == 1
+
+    def test_gradient_rule_fails_the_cli(self, capsys, svg_file, spec_file):
+        svg = svg_file(self._gradient_doc())
+        out = assert_failure(capsys, svg, spec_file(), "GRADIENT_NOT_ALLOWED")
+        assert "url(#g)" in out
+
+    def test_radial_gradient_is_detected_too(self, svg_file, spec_file):
+        svg = svg_file(
+            '<defs><radialGradient id="r">'
+            '<stop offset="0" stop-color="#ff0000"/>'
+            '<stop offset="1" stop-color="#000000"/></radialGradient></defs>'
+            '<rect width="10" height="10" fill="url(#r)"/>')
+        failures, _notes, stats = validate(svg, spec_file())
+        assert RULE_GRADIENT in rules(failures)
+        assert stats["gradient_definitions"] == 1
+
+    def test_stroke_paint_server_is_detected(self, svg_file, spec_file):
+        svg = svg_file(
+            '<defs><linearGradient id="g">'
+            '<stop offset="0" stop-color="#ff0000"/>'
+            '<stop offset="1" stop-color="#00ff00"/></linearGradient></defs>'
+            '<rect width="10" height="10" fill="none" stroke="url(#g)" '
+            'stroke-width="2"/>')
+        failures, _notes, _stats = validate(svg, spec_file())
+        assert RULE_GRADIENT in rules(failures)
+
+    def test_paint_server_in_a_style_block_is_detected(self, svg_file, spec_file):
+        """A url() in a stylesheet declaration is a paint no less than an attribute."""
+        svg = svg_file(
+            '<style>.band { fill: url(#g); }</style>'
+            '<defs><linearGradient id="g">'
+            '<stop offset="0" stop-color="#ff0000"/>'
+            '<stop offset="1" stop-color="#00ff00"/></linearGradient></defs>'
+            '<rect class="band" width="10" height="10"/>')
+        failures, _notes, _stats = validate(svg, spec_file())
+        assert RULE_GRADIENT in rules(failures)
+
+    def test_unresolvable_paint_reference_is_not_silently_dropped(self, svg_file,
+                                                                  spec_file):
+        """A url() to nothing cannot be proven to be flat colour, so it is reported."""
+        svg = svg_file('<rect width="10" height="10" fill="url(#nope)"/>')
+        failures, _notes, stats = validate(svg, spec_file())
+        assert RULE_GRADIENT in rules(failures), failures
+        assert stats["gradient_definitions"] == 0
+        assert "no element with id='nope'" in details(failures, RULE_GRADIENT)[0]
+
+    def test_the_message_says_the_key_was_not_set(self, svg_file, spec_file):
+        """STRICT_SPEC omits the key, and the report says so rather than claiming false."""
+        svg = svg_file('<rect width="10" height="10" fill="url(#nope)"/>')
+        failures, _notes, _stats = validate(svg, spec_file())
+        assert "allow_gradients is not set" in details(failures, RULE_GRADIENT)[0]
+
+    def test_allow_gradients_true_does_not_fire(self, svg_file, spec_file):
+        spec = json.loads(json.dumps(STRICT_SPEC))
+        spec["geometry"]["allow_gradients"] = True
+        svg = svg_file(self._gradient_doc())
+        failures, _notes, stats = validate(svg, spec_file(spec))
+        assert RULE_GRADIENT not in rules(failures), failures
+        # The reference is still recorded, and the gradient's ink is still the
+        # budget's business -- that is what allow_gradients=true means.
+        assert stats["gradient_definitions"] == 1
+        assert stats["gradient_paint_references"] == 1
+        assert stats["colors"] == ["#00ff00", "#ff0000"]
+
+    def test_pattern_paint_reference_is_named_honestly(self, svg_file, spec_file):
+        """A <pattern> is a paint server but not a gradient; the report says so."""
+        svg = svg_file(
+            '<defs><pattern id="p" width="4" height="4">'
+            '<rect width="4" height="4" fill="#ff0000"/></pattern></defs>'
+            '<rect width="50" height="50" fill="url(#p)"/>')
+        failures, _notes, _stats = validate(svg, spec_file())
+        detail = details(failures, RULE_GRADIENT)[0]
+        assert "not a gradient" in detail, detail
+
+
+class TestRasterEmbedsAreComplete:
+    """V2: the rule only matched <image>, so three raster routes passed."""
+
+    def test_feimage_with_data_href_is_reported(self, svg_file, spec_file):
+        svg = svg_file(
+            '<filter id="f"><feImage href="data:image/png;base64,iVBORw0KGgo="/>'
+            '</filter><rect width="10" height="10" fill="#ffffff" '
+            'filter="url(#f)"/>')
+        failures, _notes, _stats = validate(svg, spec_file())
+        assert "RASTER_EMBED" in rules(failures), failures
+
+    def test_feimage_with_a_fragment_href_stays_vector(self, svg_file, spec_file):
+        """href="#art" is a document-internal reference, not an embed."""
+        svg = svg_file(
+            '<defs><rect id="art" width="5" height="5" fill="#123456"/></defs>'
+            '<filter id="f"><feImage href="#art"/></filter>'
+            '<rect width="10" height="10" fill="#ffffff" filter="url(#f)"/>')
+        failures, _notes, _stats = validate(svg, spec_file())
+        assert "RASTER_EMBED" not in rules(failures), failures
+
+    def test_foreign_object_is_reported(self, svg_file, spec_file):
+        svg = svg_file(
+            '<foreignObject width="10" height="10">'
+            '<div xmlns="http://www.w3.org/1999/xhtml" style="background:#ff0000">'
+            'hi</div></foreignObject>')
+        failures, _notes, _stats = validate(svg, spec_file())
+        assert "RASTER_EMBED" in rules(failures), failures
+
+    def test_use_of_an_external_document_is_reported(self, svg_file, spec_file):
+        svg = svg_file('<use xlink:href="other.svg#art"/>')
+        failures, _notes, _stats = validate(svg, spec_file())
+        assert "RASTER_EMBED" in rules(failures), failures
+
+    def test_use_of_a_local_fragment_is_not_reported(self, svg_file, spec_file):
+        svg = svg_file('<defs><rect id="sym" width="5" height="5" '
+                       'fill="#123456"/></defs><use href="#sym"/>')
+        failures, _notes, _stats = validate(svg, spec_file())
+        assert "RASTER_EMBED" not in rules(failures), failures
+
+    def test_data_image_in_a_style_block_is_reported(self, svg_file, spec_file):
+        svg = svg_file(
+            '<style>.tile { fill: url(data:image/png;base64,iVBORw0KGgo=); }'
+            '</style><rect class="tile" width="10" height="10"/>')
+        failures, _notes, _stats = validate(svg, spec_file())
+        assert "RASTER_EMBED" in rules(failures), failures
+
+    def test_data_image_in_an_inline_style_is_reported(self, svg_file, spec_file):
+        svg = svg_file('<rect width="10" height="10" '
+                       'style="fill:url(data:image/png;base64,iVBORw0KGgo=)"/>')
+        failures, _notes, _stats = validate(svg, spec_file())
+        assert "RASTER_EMBED" in rules(failures), failures
+
+    def test_all_of_them_pass_when_the_spec_allows_raster(self, svg_file, spec_file):
+        spec = json.loads(json.dumps(STRICT_SPEC))
+        spec["geometry"]["allow_raster_embed"] = True
+        svg = svg_file(
+            '<foreignObject width="10" height="10"><div '
+            'xmlns="http://www.w3.org/1999/xhtml">x</div></foreignObject>'
+            '<use xlink:href="other.svg#art"/>')
+        failures, _notes, _stats = validate(svg, spec_file(spec))
+        assert "RASTER_EMBED" not in rules(failures), failures
+
+
+class TestNonPaintingSubtree:
+    """V3/V4: the skip covered the element, not its subtree, and mixed cases."""
+
+    def test_stroked_path_in_a_clip_path_is_not_a_hairline(self, svg_file, spec_file):
+        svg = svg_file(
+            '<clipPath id="c"><path d="M0,0 L10,0 L10,10 Z" stroke="#000000" '
+            'stroke-width="0.1"/></clipPath>'
+            '<rect width="50" height="50" fill="#ffffff" clip-path="url(#c)"/>')
+        failures, _notes, _stats = validate(svg, spec_file())
+        assert "MIN_STROKE_WIDTH" not in rules(failures), failures
+
+    def test_stroked_path_in_unreferenced_defs_is_not_a_hairline(self, svg_file,
+                                                                 spec_file):
+        svg = svg_file('<defs><path d="M0,0 L10,0 L10,10 Z" stroke="#000000" '
+                       'stroke-width="0.1"/></defs>'
+                       '<rect width="50" height="50" fill="#ffffff"/>')
+        failures, notes, stats = validate(svg, spec_file())
+        assert "MIN_STROKE_WIDTH" not in rules(failures), failures
+        # Partial coverage is still reported -- once, naming the count.
+        assert RULE_UNCHECKED in notes_text(notes)
+        assert stats["unchecked_definition_elements"] == 1
+
+    def test_instantiated_definition_content_is_checked(self, svg_file, spec_file):
+        """Content a <use> instantiates really prints, so it is a hard finding."""
+        svg = svg_file(
+            '<defs><g id="art"><path d="M0,0 L10,0 L10,10 Z" stroke="#000000" '
+            'stroke-width="0.1"/></g></defs><use href="#art"/>')
+        failures, _notes, _stats = validate(svg, spec_file())
+        assert "MIN_STROKE_WIDTH" in rules(failures), failures
+
+    def test_unreferenced_symbol_is_a_hard_finding_only_when_used(self, svg_file,
+                                                                  spec_file):
+        body = ('<symbol id="s"><path d="M0,0 L10,0 L10,10 Z" stroke="#000000" '
+                'stroke-width="0.1"/></symbol>')
+        unused, notes, _stats = validate(svg_file(body + '<rect width="5" '
+                                                'height="5" fill="#ffffff"/>'),
+                                         spec_file())
+        assert "MIN_STROKE_WIDTH" not in rules(unused), unused
+        assert RULE_UNCHECKED in notes_text(notes)
+
+        used, _notes2, _stats2 = validate(svg_file(body + '<use href="#s"/>'),
+                                         spec_file())
+        assert "MIN_STROKE_WIDTH" in rules(used), used
+
+    def test_display_none_content_is_not_counted(self, svg_file, spec_file):
+        svg = svg_file('<rect width="50" height="50" fill="#123456" '
+                       'display="none"/>')
+        failures, notes, stats = validate(svg, spec_file())
+        assert not failures, failures
+        assert stats["colors"] == []
+        assert stats["hidden_elements"] >= 1
+        # Hidden is not the same as unchecked: nothing here is definition content.
+        assert RULE_UNCHECKED not in notes_text(notes)
+
+    def test_visibility_hidden_paints_nothing(self, svg_file, spec_file):
+        svg = svg_file('<rect width="50" height="50" fill="#123456" '
+                       'stroke="#000000" stroke-width="0.1" '
+                       'visibility="hidden"/>')
+        failures, _notes, stats = validate(svg, spec_file())
+        assert not failures, failures
+        assert stats["colors"] == []
+
+    def test_a_descendant_may_restore_visibility(self, svg_file, spec_file):
+        """CSS: visibility is inherited but a descendant may set visible again."""
+        svg = svg_file(
+            '<g visibility="hidden">'
+            '<rect width="50" height="50" fill="#123456" visibility="visible" '
+            'stroke="#000000" stroke-width="0.1"/>'
+            '</g>')
+        failures, _notes, stats = validate(svg, spec_file())
+        assert "MIN_STROKE_WIDTH" in rules(failures), failures
+        assert "#123456" in stats["colors"]
+
+    def test_container_sets_are_spelled_the_way_they_are_looked_up(self):
+        """A set member that cannot match is the bug V3 was: keep one case."""
+        for constant in ("_INERT_CONTAINERS", "_INK_RESOURCE_CONTAINERS",
+                         "_DEFERRED_INK_CONTAINERS", "_SHAPE_ELEMENTS"):
+            members = getattr(validate_svg, constant)
+            assert members, constant
+            for member in members:
+                assert member == member.lower(), (constant, member)
+
+    def test_a_group_is_not_reported_as_a_stroke(self, svg_file, spec_file):
+        """Only shapes paint: a stroked <g> must not double-count its path."""
+        svg = svg_file('<g stroke="#000000" stroke-width="0.1pt">'
+                       '<path id="only" d="M0,0 L10,10"/></g>')
+        failures, _notes, _stats = validate(svg, spec_file())
+        stroke = details(failures, "MIN_STROKE_WIDTH")
+        assert len(stroke) == 1, stroke
+        assert "id='only'" in stroke[0]
+
+
+class TestCascadeImportance:
+    """V5: !important was stripped, so an inline style always won."""
+
+    def _colours(self, svg, spec_path):
+        failures, _notes, stats = validate(svg, spec_path)
+        return stats["colors"], failures
+
+    def test_stylesheet_important_beats_an_inline_declaration(self, svg_file,
+                                                              spec_file):
+        svg = svg_file('<style>rect{fill:#f00 !important}</style>'
+                       '<rect width="10" height="10" style="fill:#0f0"/>')
+        colours, _failures = self._colours(svg, spec_file())
+        assert colours == ["#ff0000"], colours
+
+    def test_inline_important_beats_a_stylesheet_important(self, svg_file,
+                                                           spec_file):
+        svg = svg_file('<style>rect{fill:#f00 !important}</style>'
+                       '<rect width="10" height="10" '
+                       'style="fill:#0f0 !important"/>')
+        colours, _failures = self._colours(svg, spec_file())
+        assert colours == ["#00ff00"], colours
+
+    def test_inline_still_beats_an_ordinary_stylesheet_rule(self, svg_file,
+                                                            spec_file):
+        svg = svg_file('<style>rect{fill:#f00}</style>'
+                       '<rect width="10" height="10" style="fill:#0f0"/>')
+        colours, _failures = self._colours(svg, spec_file())
+        assert colours == ["#00ff00"], colours
+
+    def test_important_rule_beats_a_more_specific_ordinary_one(self, svg_file,
+                                                               spec_file):
+        """Importance out-ranks specificity, exactly as CSS ranks it."""
+        svg = svg_file('<style>#win{fill:#0f0} rect{fill:#f00 !important}'
+                       '</style><rect id="win" width="10" height="10"/>')
+        colours, _failures = self._colours(svg, spec_file())
+        assert colours == ["#ff0000"], colours
+
+    def test_important_survives_in_a_stroke_declaration(self, svg_file, spec_file):
+        """The stroke check reads the same cascade, so importance must apply there."""
+        svg = svg_file('<style>path{stroke-width:0.5pt !important}</style>'
+                       '<path id="p" d="M0,0 L10,0 L10,10 Z" stroke="#000000" '
+                       'stroke-width="4pt" style="stroke-width:4pt"/>')
+        failures, _notes, _stats = validate(svg, spec_file())
+        assert "MIN_STROKE_WIDTH" in rules(failures), failures
+
+
+class TestImplicitAndUnresolvedColours:
+    """V6: implicit black and currentColor were not counted at all."""
+
+    def test_a_bare_path_uses_black(self, svg_file, spec_file):
+        svg = svg_file('<path id="bare" d="M1,1 L99,1 L99,99 Z"/>')
+        failures, _notes, stats = validate(svg, spec_file())
+        assert not failures, failures
+        assert stats["colors"] == ["#000000"], stats["colors"]
+        assert stats["implicit_fill_elements"] == 1
+
+    def test_fill_none_is_not_black(self, svg_file, spec_file):
+        svg = svg_file('<path d="M1,1 L99,1 L99,99 Z" fill="none"/>')
+        _failures, _notes, stats = validate(svg, spec_file())
+        assert stats["colors"] == []
+        assert stats["implicit_fill_elements"] == 0
+
+    def test_inherited_fill_is_not_black(self, svg_file, spec_file):
+        svg = svg_file('<g fill="#123456"><rect width="10" height="10"/></g>')
+        _failures, _notes, stats = validate(svg, spec_file())
+        assert stats["colors"] == ["#123456"], stats["colors"]
+        assert stats["implicit_fill_elements"] == 0
+
+    def test_inherited_fill_none_is_not_black(self, svg_file, spec_file):
+        svg = svg_file('<g fill="none"><rect width="10" height="10"/></g>')
+        _failures, _notes, stats = validate(svg, spec_file())
+        assert stats["colors"] == []
+
+    def test_currentcolor_resolves_from_the_root_colour(self, svg_file, spec_file):
+        svg = svg_file('<rect width="10" height="10" fill="currentColor"/>',
+                       extra_root=' color="#00ff00"')
+        _failures, _notes, stats = validate(svg, spec_file())
+        assert stats["colors"] == ["#00ff00"], stats["colors"]
+        assert stats["currentcolor_elements"] == 1
+
+    def test_currentcolor_resolves_from_an_inherited_colour(self, svg_file,
+                                                            spec_file):
+        svg = svg_file('<g color="#0000ff"><rect width="10" height="10" '
+                       'fill="currentColor"/></g>')
+        _failures, _notes, stats = validate(svg, spec_file())
+        assert stats["colors"] == ["#0000ff"], stats["colors"]
+
+    def test_currentcolor_without_colour_is_the_initial_black(self, svg_file,
+                                                              spec_file):
+        svg = svg_file('<rect width="10" height="10" fill="currentColor"/>')
+        _failures, _notes, stats = validate(svg, spec_file())
+        assert stats["colors"] == ["#000000"], stats["colors"]
+
+    def test_a_gradient_stop_colour_counts_for_the_budget(self, svg_file,
+                                                          spec_file):
+        """The declared stops are ink, referenced or not (snap_colors rewrites them)."""
+        svg = svg_file(
+            '<defs><linearGradient id="g">'
+            '<stop offset="0" stop-color="#ff0000"/>'
+            '<stop offset="1" stop-color="#00ff00"/></linearGradient></defs>'
+            '<rect width="10" height="10" fill="none"/>')
+        _failures, _notes, stats = validate(svg, spec_file())
+        assert stats["colors"] == ["#00ff00", "#ff0000"], stats["colors"]
+
+    def test_black_artwork_no_longer_reads_as_no_ink(self, svg_file, spec_file):
+        """The budget is a budget: black fill has to occupy a slot."""
+        svg = svg_file('<path d="M1,1 L99,1 L99,99 Z"/>')
+        spec = json.loads(json.dumps(STRICT_SPEC))
+        spec["palette"] = ["#ffffff"]
+        failures, _notes, stats = validate(svg, spec_file(spec))
+        assert "PALETTE" in rules(failures), failures
+        assert stats["off_palette_colors"] == ["#000000"]
+
+
+class TestOpacityAndEffects:
+    """V7: invisible strokes failed, translucent paint was silent, effects vanished."""
+
+    def test_stroke_opacity_zero_is_not_a_hairline(self, svg_file, spec_file):
+        svg = svg_file('<rect width="50" height="50" fill="#ffffff" '
+                       'stroke="#000000" stroke-width="0.1" stroke-opacity="0"/>')
+        failures, _notes, _stats = validate(svg, spec_file())
+        assert "MIN_STROKE_WIDTH" not in rules(failures), failures
+
+    def test_element_opacity_zero_is_not_a_hairline(self, svg_file, spec_file):
+        svg = svg_file('<g opacity="0"><rect width="50" height="50" '
+                       'stroke="#000000" stroke-width="0.1"/></g>')
+        failures, _notes, _stats = validate(svg, spec_file())
+        assert "MIN_STROKE_WIDTH" not in rules(failures), failures
+
+    def test_a_translucent_fill_is_noted_not_failed(self, svg_file, spec_file):
+        svg = svg_file('<rect width="50" height="50" fill="#ff0000" '
+                       'fill-opacity="0.5"/>')
+        failures, notes, stats = validate(svg, spec_file())
+        assert not failures, failures
+        assert RULE_TRANSLUCENT in notes_text(notes)
+        assert stats["translucent_elements"] == 1
+        # A 50% screen of a spot colour still occupies that colour's slot.
+        assert stats["colors"] == ["#ff0000"]
+
+    def test_filter_reference_is_advisory(self, svg_file, spec_file):
+        svg = svg_file('<filter id="b"><feGaussianBlur stdDeviation="3"/></filter>'
+                       '<rect width="10" height="10" fill="#ffffff" '
+                       'filter="url(#b)"/>')
+        failures, notes, stats = validate(svg, spec_file())
+        assert not failures, failures
+        assert RULE_EFFECT not in rules(failures)
+        assert RULE_EFFECT in notes_text(notes)
+        assert stats["effect_references"] == 1
+
+    def test_clip_path_and_mask_references_are_advisory(self, svg_file, spec_file):
+        svg = svg_file(
+            '<clipPath id="c"><rect width="10" height="10"/></clipPath>'
+            '<mask id="m"><rect width="10" height="10" fill="#ffffff"/></mask>'
+            '<rect width="10" height="10" fill="#ffffff" clip-path="url(#c)" '
+            'mask="url(#m)"/>')
+        failures, notes, stats = validate(svg, spec_file())
+        assert not failures, failures
+        assert stats["effect_references"] == 2
+        assert notes_text(notes).count(RULE_EFFECT) == 1   # one aggregated note
+
+    def test_the_effect_advisory_does_not_fail_the_cli(self, capsys, svg_file,
+                                                       spec_file):
+        svg = svg_file('<mask id="m"><rect width="10" height="10" '
+                       'fill="#ffffff"/></mask>'
+                       '<rect width="10" height="10" fill="#ffffff" '
+                       'mask="url(#m)"/>')
+        code, out = run(capsys, svg, spec_file())
+        assert code == 0, out
+        assert RULE_EFFECT in out
+
+
+class TestNewStatsKeys:
+    """The new observations have to reach the manifest, not just the message."""
+
+    def test_stats_carry_the_new_keys(self, svg_file, spec_file):
+        svg = svg_file('<rect width="10" height="10" fill="#ffffff"/>')
+        _failures, _notes, stats = validate(svg, spec_file())
+        for key in ("allow_gradients", "gradient_definitions",
+                    "gradient_paint_references", "implicit_fill_elements",
+                    "currentcolor_elements", "hidden_elements",
+                    "translucent_elements", "effect_references",
+                    "unchecked_definition_elements"):
+            assert key in stats, key
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
