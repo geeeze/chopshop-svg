@@ -39,7 +39,7 @@ A missing or wrong token answers `401 {"error": "unauthorized"}`.
 | POST | `/validations/:id/jev` | optional Jev add-on (see below) |
 | POST | `/recolour` | **unbuilt seam** — rewrite one candidate SVG's paint from an explicit `{src: dst}` map, return the SVG bytes inline |
 | POST | `/recolour/colours` | **unbuilt seam** — list one SVG's distinct declared colours, most-used first |
-| POST | `/compose` | **the composition operation** — merge inline layers (vector SVG strings + raster data-URIs) into one SVG with the vectors intact; returns the SVG inline |
+| POST | `/compose` | **the composition operation** — merge inline layers (vector SVG strings + raster data-URIs) into one SVG with the vectors intact; returns the SVG inline. `op` is accepted and ignored — only `spec` is read |
 
 Anything else answers `404 {"error": "unknown route"}`.
 
@@ -187,7 +187,9 @@ layer stays a vector**. The merge itself is `scripts/compose_svg.py`
 (`compose(spec) -> str`, also a CLI); the route adds only the envelope, the
 refusal status and the log line.
 
-Request: `{"op": "compose", "spec": {...}}`, where the spec is
+Request: `{"op": "compose", "spec": {...}}`. `op` is informational — the route
+reads only `spec` and ignores `op` (the same accepted-and-ignored convention as
+`source_kind` on `POST /jobs`). The spec is
 
 | key | meaning |
 |---|---|

@@ -372,7 +372,7 @@ chopshop-svg/
 ├── tests/                     # pytest suite (synthetic fixtures only)
 ├── skills/                    # in-repo agent skill (references/ docs)
 ├── 00_source/                 # example raster/SVG batch for the print check
-└── 01_prepped/ 02_traced/ 04_validated/ 05_final/ 06_run/ 07_palettes/ 08_tune/ 09_filters/   # generated (gitignored)
+└── 01_prepped/ 02_traced/ 03_cleaned/ 04_validated/ 05_final/ 06_run/ 07_palettes/ 08_tune/ 09_filters/   # generated (gitignored)
                               #  05_final/ also holds per-artwork subdirs and
                               #  <artwork>.<candidate>.<RUN_ID>.* run copies
 ```
@@ -962,8 +962,7 @@ its source, control first.
 ```
 
 The suite count is deliberately not repeated here: **`CONTEXT.md` is its single
-canonical home** (currently 590 tests, all passing). The suite uses synthetic
-images generated in-test (Pillow),
+canonical home**. The suite uses synthetic images generated in-test (Pillow),
 never the real artwork, so it runs anywhere without the `00_source/` batch.
 Tests that need system tools (inkscape, gs, qpdf, poppler-utils) skip
 cleanly when those are absent — a fresh checkout without tools won't look

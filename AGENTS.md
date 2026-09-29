@@ -160,7 +160,7 @@ docker compose run --rm chopshop ./front_pipeline.sh 00_source/art.png # trace s
 .venv/bin/pyflakes scripts/*.py validate_svg.py preflight.py  # lint
 ```
 
-The suite currently passes (763 tests). If you change the trace stage, add or
+The suite currently passes (853 tests, measured). If you change the trace stage, add or
 update the matching test in `tests/` — especially any change to tracing,
 comparison, or prep behaviour.
 

@@ -599,12 +599,12 @@ colour — the point is to remove the clock, not the colour management.
 
 ### Optional generation stacks (not in this repo)
 
-This copy is generated from a private working skill and has had its
-generation-stack sections removed. The local skill also documents a
-text-to-image / img2img bridge used to *generate* a source raster
-before tracing, including a specific GPU stack and local install
-paths. None of that is part of this pipeline, and none of the scripts
-it describes exist here.
+This skill is **repo-owned** (`skills/README.md`): it is maintained here by hand,
+not generated from a private working skill, so nothing is stripped on the way in.
+It deliberately does NOT cover the text-to-image / img2img bridge that can
+*generate* a source raster before tracing — that belongs to a private stack, with
+its own GPU stack and local install paths, and none of the scripts it describes
+exist here.
 
 If you need it, see the private `chopshop-sui` repo. Nothing in
 `front_pipeline.sh` or `pipeline.sh` calls it: generation is opt-in and
@@ -615,8 +615,12 @@ happens upstream of the pipeline, never inside it.
 `scripts/palette_variants.py` re-colours a FINISHED trace onto the palettes in
 `scripts/palettes.json` while leaving the CAD structure byte-identical (only
 `fill`/`stroke`/`stop-color` change; every `d=`, `viewBox`, `width`/`height` is
-untouched). It is an aux layer like `<private-script>` -- it calls the pipeline,
-nothing calls it. Output: `07_palettes/<stem>/<palette-id>/` + `report.json|md`.
+untouched). Like every auxiliary bench here — `im_filters`, `tune_sweep`,
+`node_reduce` — it calls the pipeline; no stage calls the bench itself. (Its
+paint-rewriting helpers `as_hex` / `apply_mapping` / `declared_colours` ARE
+imported by the proof-variant dataset stage, `scripts/proof_variants.py`, so that
+code is shared and tested once.) Output: `07_palettes/<stem>/<palette-id>/` +
+`report.json|md`.
 
 ```bash
 .venv/bin/python scripts/palette_variants.py --list

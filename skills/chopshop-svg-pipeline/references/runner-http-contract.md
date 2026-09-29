@@ -134,8 +134,10 @@ settles to `done`.
 ## Composition (`POST /compose`) — the studio consumes this
 
 The MISSING composition operation: merge layers into one printable SVG WITHOUT
-rasterising, so every vector layer stays a vector. Body `{op: "compose", spec}`,
-spec `{width, height, background, palette?, layers[]}`, each layer
+rasterising, so every vector layer stays a vector. Body `{op: "compose", spec}`;
+`op` is accepted and ignored — only `spec` is read (the same convention as
+`source_kind` on `POST /jobs`). The spec is
+`{width, height, background, palette?, layers[]}`, each layer
 `{type: "svg"|"raster", src, x, y, w, h, opacity, hue}`. `src` is ALWAYS inline
 (an SVG document string, or a `data:` URI) — the route never touches the
 filesystem, so it cannot read the runner's disk.

@@ -2,24 +2,43 @@
 
 How the engineering skills should consume this repo's domain documentation when exploring the codebase.
 
+## This repo's shape (single-context)
+
+chopshop-svg is a **single-context repo**: the one context document is
+**`CONTEXT.md` at the repo root**, and it is the only place domain vocabulary,
+working state and caveats live. There is **no `CONTEXT-MAP.md`** and **no
+`docs/adr/`** today — do not go looking for either, and do not create them
+speculatively. If a decision is worth an ADR it will be created lazily, by the
+`/domain-modeling` skill, the moment a term or decision actually needs it.
+
 ## Before exploring, read these
 
-- **`CONTEXT.md`** at the repo root, or
-- **`CONTEXT-MAP.md`** at the repo root if it exists: it points at one `CONTEXT.md` per context. Read each one relevant to the topic.
-- **`docs/adr/`**: read ADRs that touch the area you're about to work in. In multi-context repos, also check `src/<context>/docs/adr/` for context-scoped decisions.
+- **`CONTEXT.md`** at the repo root — the context document for this repo.
+- **`CONTEXT-MAP.md`** at the repo root *if it appears*: it would point at one `CONTEXT.md` per context, and you should read each one relevant to the topic. It does not exist here yet.
+- **`docs/adr/`** *if it appears*: read ADRs that touch the area you're about to work in. It does not exist here yet either.
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
 
 ## File structure
 
-Single-context repo (most repos):
+This repo today (single-context; `docs/adr/` is not created until a decision needs it):
+
+```
+/
+├── CONTEXT.md            ← the context document (repo root)
+├── AGENTS.md             ← agent orientation / hard rules
+├── README.md
+├── docs/                 ← OVERVIEW, HOWTO-print-check, pipeline-schemas,
+│                           runner-http-contract, agents/
+└── scripts/  tests/  skills/
+```
+
+The generic single-context shape, for comparison (most repos):
 
 ```
 /
 ├── CONTEXT.md
 ├── docs/adr/
-│   ├── 0001-event-sourced-orders.md
-│   └── 0002-postgres-for-write-model.md
 └── src/
 ```
 

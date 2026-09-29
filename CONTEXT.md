@@ -208,10 +208,6 @@ is which candidate to print.
   test count — `README.md` and `docs/OVERVIEW.md` point here instead, because the
   number moves with every change and three stale copies were three chances to
   mislead. Verified on a full checkout with the repo venv:
-- **Suite count has one canonical home: this file.** No other document states a
-  test count — `README.md` and `docs/OVERVIEW.md` point here instead, because the
-  number moves with every change and three stale copies were three chances to
-  mislead. Verified on a full checkout with the repo venv:
   `.venv/bin/python -m pytest tests -q` collects **853** and passed **853**
   (0 skipped) on the merged tree — the two suites that produced this tree were
   each measured on a checkout without the other's tests (842 for the
@@ -223,19 +219,28 @@ is which candidate to print.
   a protected agent-instruction file. The owner's direction on 2026-09-29 lifted
   that for the count line and it now reads 763 — a SNAPSHOT, not the live number:
   this file is the one to trust, and the two must not be allowed to disagree
-  silently again. The pass count is also environment-dependent in a way the
-  collected total is not: the same checkout has been observed at `853 passed` and
-  at `808 passed, 45 skipped`, so compare COLLECTED totals when judging drift.)
+  silently again. A later pass measured the live count at **853 collected / 853
+  passed, 0 skipped** and tried to correct `AGENTS.md` again: the write guard
+  blocked it (2026-09-29), so `README.md`'s stale copy was removed instead and
+  the mismatch is recorded, not fixed. `AGENTS.md` still reads 763 — do not
+  believe a number in that file over this one. The pass count is also
+  environment-dependent in a way the collected total is not: the same checkout
+  has been observed at `853 passed` and at `808 passed, 45 skipped`, so compare
+  COLLECTED totals when judging drift.)
 
 - **Two Pythons, and the docs name only one.** `AGENTS.md:76` says "Python 3.13
   through a repo-root venv", which is TRUE of the container: the Dockerfile is
   `debian:13` and Debian 13's system Python is 3.13, so the venv baked into the
-  image is 3.13. The HOST checkout's `~/chopshop-svg/.venv/bin/python` is
-  **3.12.3**, because this box has no 3.13 to build one from. Both statements can
-  be right at once and neither file says which is which — a reader who checks the
-  host venv concludes the doc is wrong, which is exactly what happened when the
-  proof-variant brief and its independent review both reported the discrepancy.
-  It is not drift; it is an unstated distinction.
+  image is 3.13. A **host** checkout builds whatever venv that host can build,
+  and `AGENTS.md` never says which Python it is naming. Re-measured on this
+  checkout 2026-09-29: `.venv/bin/python` is **3.13.5** and system `python3` is
+  **3.13.5**, so today they agree with the doc. An earlier host checkout was
+  **3.12.3** (that box had no 3.13 to build one from), which is what made the doc
+  look wrong — and made both the proof-variant brief and its independent review
+  report a discrepancy. That was never drift; it was an unstated distinction.
+  State the container-vs-host distinction, not just a version number.
+  (The path `~/chopshop-svg/.venv` this bullet used to name does not exist on
+  this box; the checkout lives under `Documents/GitHub/`.)
 
 - **The dataset stage writes into the JOB directory, not the project tree.** A
   per-job artifact left in `05_final/` or `08_tune/` would survive `DELETE` and
@@ -329,3 +334,38 @@ is which candidate to print.
 `OVERVIEW.md` and `HOWTO-print-check.md` moved from the repo root into `docs/`
 to consolidate the `.md` spread. Update any external link to the old root
 paths accordingly.
+
+## Doc/code alignment pass (2026-09-29)
+
+A documentation audit walked `README.md`, `docs/*`, `docs/agents/*`,
+`skills/**`, `pipeline.sh`/`front_pipeline.sh` and `runner.py` against each other
+and against the code. Findings and what was done:
+
+- **Stale test count in `README.md`** — the "Tests" section said it did not
+  repeat the count and then repeated a wrong one (`590`). Removed; the count now
+  lives only in this file. (`AGENTS.md` still reads 763; the write guard blocks
+  edits to it — recorded above, not fixed.)
+- **`CONTEXT.md` had the suite-count bullet duplicated** (the same paragraph
+  twice, one truncated). Deduped.
+- **`runner-http-contract.md` verified against `runner.py`** — every route, the
+  cancel/archive/dataset status ladders, the file-proxy resolution order, the Jev
+  503-not-404 rule, the disk gate, the in-memory caveat and the health payload all
+  match the code. Two doc-only clarifications landed: `POST /compose` reads only
+  `spec` and ignores `op`, and the same note is on the skill's copy of the
+  contract.
+- **`skills/chopshop-svg-pipeline/SKILL.md` claimed to be generated** from a
+  private working skill, which contradicts `skills/README.md` (repo-owned, no
+  on-disk source) and `sync-skills` (`GENERATED` is empty). Rewritten to say what
+  is true; the matching `REDACTED_SECTIONS` replacement text in `sync-skills` was
+  updated in lockstep so a future regeneration cannot reintroduce it. Also fixed
+  a leftover `<private-script>` redaction placeholder in the palette-variants
+  section and recorded that `palette_variants`' paint helpers are imported by
+  `proof_variants.py`.
+- **`docs/agents/domain.md`** was the generic upstream scaffold: it pointed at
+  `CONTEXT-MAP.md` and `docs/adr/`, neither of which exists here, and its file
+  structure showed `src/` trees this repo does not have. Made repo-specific while
+  keeping the generic guidance.
+- **`CONTEXT.md`'s "Two Pythons" caveat was out of date** — it named a
+  `~/chopshop-svg/.venv` that does not exist and a host Python of 3.12.3; this
+  checkout's venv is 3.13.5. Rewritten to state the distinction rather than a
+  version, with the re-measurement recorded.
