@@ -1390,5 +1390,55 @@ class TestNewStatsKeys:
                     "unchecked_definition_elements"):
             assert key in stats, key
 
+
+class TestAllowRasterEmbedIsEchoedToStats:
+    """Every ``geometry.allow_*`` flag reaches the stats dict, so a consumer
+    reading the manifest (not the spec) can tell "checked and passed" from
+    "not checked".  With ``allow_raster_embed`` true the raster scan returns
+    before it inspects anything, so a missing RASTER_EMBED finding means the
+    gate was disarmed, not that it passed.  The flag used to be the one
+    geometry.allow_* missing from the dict, and nothing asserted its absence.
+    """
+
+    def test_false_is_echoed(self, svg_file, spec_file):
+        svg = svg_file('<rect width="10" height="10" fill="#ffffff"/>')
+        spec = json.loads(json.dumps(STRICT_SPEC))
+        assert spec["geometry"]["allow_raster_embed"] is False
+        _failures, _notes, stats = validate(svg, spec_file(spec))
+        assert stats["allow_raster_embed"] is False
+        assert stats["raster_embed_source"] == "geometry.allow_raster_embed"
+
+    def test_true_is_echoed(self, svg_file, spec_file):
+        svg = svg_file('<rect width="10" height="10" fill="#ffffff"/>')
+        spec = json.loads(json.dumps(STRICT_SPEC))
+        spec["geometry"]["allow_raster_embed"] = True
+        _failures, _notes, stats = validate(svg, spec_file(spec))
+        assert stats["allow_raster_embed"] is True
+        assert stats["raster_embed_source"] == "geometry.allow_raster_embed"
+
+    def test_absent_key_is_echoed_as_false_with_a_default_source(self, svg_file,
+                                                                spec_file):
+        svg = svg_file('<rect width="10" height="10" fill="#ffffff"/>')
+        spec = json.loads(json.dumps(STRICT_SPEC))
+        del spec["geometry"]["allow_raster_embed"]
+        _failures, _notes, stats = validate(svg, spec_file(spec))
+        assert stats["allow_raster_embed"] is False
+        assert "default" in stats["raster_embed_source"]
+
+    def test_every_geometry_allow_flag_is_present(self, svg_file, spec_file):
+        svg = svg_file('<rect width="10" height="10" fill="#ffffff"/>')
+        _failures, _notes, stats = validate(svg, spec_file())
+        for key in ("allow_raster_embed", "raster_embed_source",
+                    "allow_open_paths", "open_paths_source",
+                    "allow_gradients"):
+            assert key in stats, key
+
+    def test_json_serialisable_for_the_manifest(self, svg_file, spec_file):
+        """preflight.py copies this dict straight into the manifest."""
+        svg = svg_file('<rect width="10" height="10" fill="#ffffff"/>')
+        _failures, _notes, stats = validate(svg, spec_file())
+        assert json.loads(json.dumps(stats))["allow_raster_embed"] is False
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

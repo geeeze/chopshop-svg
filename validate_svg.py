@@ -1179,8 +1179,11 @@ def load_spec(spec_path, failures, notes):
     validation_block = spec.get("validation")
     gradient_source = ("geometry.allow_gradients" if "allow_gradients" in geometry
                       else "default (geometry.allow_gradients is not set)")
+    raster_source = ("geometry.allow_raster_embed" if "allow_raster_embed" in geometry
+                     else "default (geometry.allow_raster_embed is not set)")
     resolved = {
         "allow_raster_embed": bool(geometry.get("allow_raster_embed", False)),
+        "raster_embed_source": raster_source,
         "allow_gradients": bool(geometry.get("allow_gradients", False)),
         "allow_gradients_source": gradient_source,
         "allow_open_paths": allow_open,
@@ -2281,6 +2284,13 @@ def validate(svg_path, spec_path):
     else:
         stats["size_check"] = "skipped: spec has no dimensions block"
 
+    # Every geometry.allow_* flag is echoed into the stats dict so a consumer
+    # reading the manifest (not the spec) can tell "checked and passed" from
+    # "not checked": with allow_raster_embed true the raster scan returns before
+    # it inspects anything, so a missing RASTER_EMBED finding means the gate
+    # was disarmed, not that it passed.
+    stats["allow_raster_embed"] = spec["allow_raster_embed"]
+    stats["raster_embed_source"] = spec["raster_embed_source"]
     stats["allow_open_paths"] = spec["allow_open_paths"]
     stats["open_paths_source"] = spec["open_paths_source"]
     stats["allow_gradients"] = spec["allow_gradients"]

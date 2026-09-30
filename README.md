@@ -957,9 +957,15 @@ its source, control first.
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest tests/
+.venv/bin/python -m pytest tests/     # same as a bare `pytest` at the repo root
 .venv/bin/pyflakes scripts/*.py validate_svg.py preflight.py  # lint
 ```
+
+`pytest.ini` declares `testpaths = tests`, so the bare `.venv/bin/python -m
+pytest` and the explicit `pytest tests/` are equivalent. That matters because
+`runner-data/` is pipeline output written as root by the containerised runner —
+without `testpaths` a bare `pytest` collects it and dies with a
+`PermissionError` during collection.
 
 The suite count is deliberately not repeated here: **`CONTEXT.md` is its single
 canonical home**. The suite uses synthetic images generated in-test (Pillow),

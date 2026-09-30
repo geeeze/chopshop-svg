@@ -755,3 +755,49 @@ class TestLayerAStillIntact:
         path.write_text(json.dumps(data), encoding="utf-8")
         failures, _notes, _stats = validate_svg.validate(svg, str(path))
         assert validate_svg.RULE_OPEN in {r for r, _ in failures}
+
+# --------------------------------------------------------------------------
+# The geometry.allow_* flags must be readable from the manifest alone
+# --------------------------------------------------------------------------
+
+class TestAllowFlagsReachTheManifest:
+    """preflight.py copies validate_svg.validate()'s stats dict into the
+    manifest as ``stats["static"]``.  Every ``geometry.allow_*`` flag has to be
+    in there, because a consumer that cannot see the flag cannot tell a gate
+    that ran and passed from one that was never armed: with
+    ``allow_raster_embed`` true the raster scan returns before it inspects
+    anything, so "no RASTER_EMBED finding" means "not checked".
+    """
+
+    MANIFEST_SVG = ('<path id="p" d="M2,2 L30,30 L30,20 Z" fill="#000000" '
+                    'stroke="#000000" stroke-width="2pt"/>')
+
+    def _static(self, tmp_path, allow_raster):
+        spec = write_spec(
+            tmp_path,
+            lambda d: d["geometry"].__setitem__("allow_raster_embed", allow_raster))
+        svg = write_svg(tmp_path, "raster_%s.svg" % allow_raster, self.MANIFEST_SVG)
+        workdir = str(tmp_path / ("work_raster_%s" % allow_raster))
+        _hard, _advisory, stats, _notes = run(svg, spec, workdir)
+        return stats["static"]
+
+    def test_false_is_in_the_manifest(self, tmp_path):
+        static = self._static(tmp_path, False)
+        assert static["allow_raster_embed"] is False
+        assert static["raster_embed_source"] == "geometry.allow_raster_embed"
+
+    def test_true_is_in_the_manifest(self, tmp_path):
+        static = self._static(tmp_path, True)
+        assert static["allow_raster_embed"] is True
+        assert static["raster_embed_source"] == "geometry.allow_raster_embed"
+
+    def test_every_allow_flag_is_in_the_manifest(self, tmp_path):
+        static = self._static(tmp_path, False)
+        for key in ("allow_raster_embed", "raster_embed_source",
+                    "allow_open_paths", "open_paths_source",
+                    "allow_gradients"):
+            assert key in static, key
+
+    def test_the_manifest_stays_json_serialisable(self, tmp_path):
+        static = self._static(tmp_path, False)
+        assert json.loads(json.dumps(static))["allow_raster_embed"] is False
