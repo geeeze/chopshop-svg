@@ -339,7 +339,7 @@ to 4 screens — the same file, one screen fewer, purely because of the garment.
 
 **Toolchain** (versions recorded in every manifest, because a result is hard to
 interpret later without them): Inkscape 1.4 · Ghostscript 10.05.1 · qpdf 12.2.0 ·
-lxml 6.1.3 · Pillow 12.3.0 · numpy 2.5.3 · Python 3.13.5.
+lxml 6.1.3 · Pillow 12.3.0 · numpy 2.5.3 · Python 3 (repo venv — see CONTEXT.md for the measured version on any given checkout).
 
 ---
 

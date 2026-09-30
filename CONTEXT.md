@@ -208,7 +208,8 @@ is which candidate to print.
   test count — `README.md` and `docs/OVERVIEW.md` point here instead, because the
   number moves with every change and three stale copies were three chances to
   mislead. Verified on a full checkout with the repo venv:
-  `.venv/bin/python -m pytest tests -q` collects **853** and passed **853**
+  `.venv/bin/python -m pytest tests -q` collects **862** (measured 2026-09-30
+  on the Python 3.14 venv; the previous full-tree measure was **853**
   (0 skipped) on the merged tree — the two suites that produced this tree were
   each measured on a checkout without the other's tests (842 for the
   artefact/sweep/layer-A work, 774 collected / 729 passed + 45 skipped for the
@@ -228,19 +229,18 @@ is which candidate to print.
   has been observed at `853 passed` and at `808 passed, 45 skipped`, so compare
   COLLECTED totals when judging drift.)
 
-- **Two Pythons, and the docs name only one.** `AGENTS.md:76` says "Python 3.13
-  through a repo-root venv", which is TRUE of the container: the Dockerfile is
-  `debian:13` and Debian 13's system Python is 3.13, so the venv baked into the
-  image is 3.13. A **host** checkout builds whatever venv that host can build,
-  and `AGENTS.md` never says which Python it is naming. Re-measured on this
-  checkout 2026-09-29: `.venv/bin/python` is **3.13.5** and system `python3` is
-  **3.13.5**, so today they agree with the doc. An earlier host checkout was
-  **3.12.3** (that box had no 3.13 to build one from), which is what made the doc
-  look wrong — and made both the proof-variant brief and its independent review
-  report a discrepancy. That was never drift; it was an unstated distinction.
-  State the container-vs-host distinction, not just a version number.
-  (The path `~/chopshop-svg/.venv` this bullet used to name does not exist on
-  this box; the checkout lives under `Documents/GitHub/`.)
+- **The venv minor follows the host, and the host moved again.** `AGENTS.md`
+  no longer names a minor (fixed 2026-09-30): it says "Python 3 through a
+  repo-root venv" and points at this file. History, so nobody re-litigates it:
+  the doc said 3.13, an earlier host built 3.12.3 (doc looked wrong — it was an
+  unstated container-vs-host distinction), then 3.13.5 agreed with the doc, and
+  on 2026-09-30 the system `python3` moved to **3.14** (3.12 removed), which
+  left the old venv's symlinks pointing at 3.14 while its site-packages sat in
+  `lib/python3.12` — nothing imported. The venv was rebuilt from scratch:
+  `.venv` is now **Python 3.14.4**, requirements installed cleanly, 862 tests
+  collect. After any host Python upgrade, rebuild with
+  `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`.
+  (The Dockerfile is still `debian:13`, so the container image's venv is 3.13.)
 
 - **The dataset stage writes into the JOB directory, not the project tree.** A
   per-job artifact left in `05_final/` or `08_tune/` would survive `DELETE` and

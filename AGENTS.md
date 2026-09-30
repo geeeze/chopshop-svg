@@ -73,8 +73,12 @@ on each pick, loop for more picks or quit.
 - **Target platform: Debian 13-family (x86_64).** System tools install via
   `apt`, Python deps via `pip`; see "Deployment / container" below for the
   run-anywhere image.
-- **Python 3.13 through a repo-root venv** (`.venv/bin/python`). On PEP 668
-  hosts a bare `pip install` is refused, so always go through the venv.
+- **Python 3 through a repo-root venv** (`.venv/bin/python`). The venv is
+  whatever Python the host's `python3` builds — the Debian 13 container image
+  gets 3.13, host checkouts get the host's version (rebuild with
+  `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt` after a
+  host Python upgrade; do not assume any specific minor). On PEP 668 hosts a
+  bare `pip install` is refused, so always go through the venv.
 - **Do not assume a Node.js runtime.** `scripts/svgo_print.yml` is an SVGO
   config for hosts that do have one; the pure-Python equivalent is
   `snap_colors.py`, and nothing in the pipeline requires Node.
@@ -156,9 +160,14 @@ docker compose run --rm chopshop ./front_pipeline.sh 00_source/art.png # trace s
 ## Running tests
 
 ```bash
-.venv/bin/python -m pytest tests/
+.venv/bin/python -m pytest tests/     # same as a bare `pytest` at the repo root
 .venv/bin/pyflakes scripts/*.py validate_svg.py preflight.py  # lint
 ```
+
+`pytest.ini` sets `testpaths = tests`, so the bare form is the correct one. Do
+not "fix" collection over `runner-data/` with `--ignore` in a wrapper: that
+directory is pipeline output, and what a test run may touch is declared in the
+config.
 
 The suite currently passes (853 tests, measured). If you change the trace stage, add or
 update the matching test in `tests/` — especially any change to tracing,
