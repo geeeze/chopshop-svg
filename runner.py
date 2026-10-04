@@ -1395,11 +1395,23 @@ def reindex_jobs() -> None:
             inputs = sorted(p for p in input_dir.iterdir() if p.is_file())
             if inputs:
                 stem = inputs[0].stem
+        # The name slug is what the published proof files are prefixed with
+        # (<slug>-proof-01.manifest.json). It is NOT the job id, and it is not
+        # recoverable from the spec, so derive it from the proof manifests on
+        # disk: without it, published_proof_stem falls back to the candidate
+        # stem and the JEV manifest lookup misses the real <slug>-proof-NN
+        # manifest after a restart.
+        name_slug = ""
+        for p in job_dir.glob("*-proof-*.manifest.json"):
+            m = re.match(r"^(.*)-proof-\d+\.manifest\.json\Z", p.name)
+            if m:
+                name_slug = m.group(1)
+                break
         JOBS[job_id] = {
             "id": job_id, "name": job_id, "stem": stem, "dir": str(job_dir),
             "spec": spec, "state": "done", "log": [], "candidates": candidates,
             "comparison": comparison, "prep_summary": None, "error": None,
-            "cancel": False, "proc": None,
+            "cancel": False, "proc": None, NAME_SLUG_KEY: name_slug,
         }
 
 
