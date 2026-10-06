@@ -224,6 +224,18 @@ artefacts — the candidate `comparison.json` and the stitched
 `06_run/<stem>.run.json` — are documented key by key in
 [`pipeline-schemas.md`](pipeline-schemas.md).
 
+It also echoes the run's own Layer A arming, under `stats.static`: every
+`geometry.allow_*` flag (`allow_gradients`, `allow_raster_embed`,
+`allow_open_paths`) with a `*_source` entry naming where each came from, plus
+the gradient counts (`gradient_definitions`, `gradient_paint_references` —
+written whether or not gradients are allowed). Read the **flag**, never the
+absence of a finding: with `allow_gradients` true the check returns before it
+looks for anything, so an empty findings list means "never asked", not "asked
+and passed". A consumer claiming "no gradients" from silence will lie about
+exactly the files where nothing was checked — the studio's proof page
+conditions both of its Layer A clearances on these flags
+(geeeze/chopshop-studio#5).
+
 With `"validation": {"variants": true}` in the spec the runner's print check
 also writes the **dataset set**: a deterministic family of similar copies of
 that one proof — mirrored, rotated and colour-shifted — as a raster+vector pair
