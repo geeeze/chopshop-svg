@@ -790,6 +790,14 @@ flat artefact is readable data, so it lands in `anomalies` rather than
 refilled on every run, so two runs sharing one directory race on
 `flattened.pdf` and on the stale-separation cleanup.
 
+**There is a second naming layer above this one: the runner's publish time.**
+When a job is filed with a `name`, the runner publishes its artifacts under
+that name's slug (`<name slug>-proof-01.png`), so a downloaded 7z says which run
+it came from; the pipeline's own names on disk are untouched, and both
+spellings resolve through the file proxy. Job-less jobs publish the pipeline's
+names verbatim. Full rules in
+`references/runner-http-contract.md` → *Published artifact names*.
+
 ### Invariants
 
 - **Resolve paint through the cascade**: inline `style` > stylesheet rule (by
@@ -1241,6 +1249,19 @@ source inspection would catch.
   that doubles back has length but zero area. See
   `references/path-geometry-svgpathtools.md` for the API recipes and fallbacks.
 
+### Composition — merge layers into one artwork (`POST /compose`)
+
+The runner exposes a vector-preserving composition operation: merge several
+inline layers — SVG document strings and raster `data:` URIs — into ONE
+printable SVG, so every vector layer stays a vector (the obvious
+rasterise-and-retrace round-trip throws away exactly what Stage 1 produced).
+`src` content is always inline, so the route never reads the runner's disk.
+Spec shape, the `hue` filter convention and the `422 invalid_spec` refusal are
+in `references/runner-http-contract.md` → *Composition*; a CLI-only path (no
+server) is `scripts/compose_svg.py`, documented in `README.md`. Compose is
+Stage-2-adjacent: it produces an artwork to run the print check on, it does not
+replace the check.
+
 ### References
 
 - `references/svg-paint-and-units.md` — colour normalisation decision table,
@@ -1262,9 +1283,10 @@ source inspection would catch.
   owns (source, render, operator), and the diverse batch that exposed each
   measurement bug.
 - `references/runner-http-contract.md` — the `runner.py` HTTP surface that
-  Studio drives: auth, every route, the on-demand archive and its status
-  ladder, the file proxy, the disk gate, in-memory state, and the optional Jev
-  add-on's 503-not-404 rule.
+  Studio drives: auth, every route — including the composition operation
+  (`POST /compose`) and the publish-time artifact naming a job's `name` carries
+  — the on-demand archive and its status ladder, the file proxy, the disk gate,
+  in-memory state, and the optional Jev add-on's 503-not-404 rule.
 - `scripts/svg_edge_case_probe.py` — run a validator against a batch of
   degenerate SVGs and flag unexpected outcomes. Wraps each case in a real `<svg>`
   root (unless the case is deliberately a whole document), so a case's outcome is

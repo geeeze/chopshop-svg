@@ -169,7 +169,11 @@ not "fix" collection over `runner-data/` with `--ignore` in a wrapper: that
 directory is pipeline output, and what a test run may touch is declared in the
 config.
 
-The suite currently passes (853 tests, measured). If you change the trace stage, add or
+The suite's count has ONE canonical home: `CONTEXT.md` — do not restate a
+number here (this line previously read 853, and before that 763; three stale
+copies taught why). Re-measure with `.venv/bin/python -m pytest tests
+--collect-only -q` and update CONTEXT.md when you touch the suite. If you
+change the trace stage, add or
 update the matching test in `tests/` — especially any change to tracing,
 comparison, or prep behaviour.
 

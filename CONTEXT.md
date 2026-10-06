@@ -218,16 +218,32 @@ is which candidate to print.
   (`AGENTS.md`'s "Running tests" section used to carry a stale count — 400 — and
   an agent session could not correct it, because the write guard refuses edits to
   a protected agent-instruction file. The owner's direction on 2026-09-29 lifted
-  that for the count line and it now reads 763 — a SNAPSHOT, not the live number:
-  this file is the one to trust, and the two must not be allowed to disagree
-  silently again. A later pass measured the live count at **853 collected / 853
-  passed, 0 skipped** and tried to correct `AGENTS.md` again: the write guard
-  blocked it (2026-09-29), so `README.md`'s stale copy was removed instead and
-  the mismatch is recorded, not fixed. `AGENTS.md` still reads 763 — do not
-  believe a number in that file over this one. The pass count is also
+  that for the count line and it read 763 — a SNAPSHOT, not the live number.
+  A later pass measured the live count at **853 collected** and tried to
+  correct `AGENTS.md` again: the write guard blocked it, so the mismatch stayed
+  recorded rather than fixed — and after the 2026-09-29 alignment pass
+  `AGENTS.md` in fact read **853**, making the "still reads 763" note below it
+  itself wrong. **Resolved 2026-10-06 (docs audit, svg#6):** `AGENTS.md`'s
+  count line was replaced with a pointer to this file, so the claim above — no
+  other document states a test count — is now literally true; the write-guard
+  saga above explains why it took three passes. The pass count is
   environment-dependent in a way the collected total is not: the same checkout
   has been observed at `853 passed` and at `808 passed, 45 skipped`, so compare
   COLLECTED totals when judging drift.)
+
+- **Freeze ledger: `validate_svg.py` has been edited under the freeze twice with
+  no lift recorded here (found by the 2026-10-06 docs audit, svg#8).**
+  `AGENTS.md:53` freezes `validate_svg.py`, `preflight.py`, `snap_colors.py` and
+  `pipeline.sh`; this file recorded lifts for `preflight.py` (one line, Layer A)
+  and `pipeline.sh` (artwork-scoped names) but none for the frozen file those
+  changes were actually about: `470c851` (2026-09-29) rewrote Layer A
+  enforcement inside `validate_svg.py` (**+1071 lines**), and `982e161`
+  (2026-09-30) added the `geometry.allow_*` stats echo (+10 lines, plus
+  `pytest.ini`'s `testpaths`). Both are on `main` with their tests in `tests/`,
+  so the edits stand — this entry is the retroactive record of them, not a
+  challenge. **Standing rule:** any edit to a frozen file records its lift here
+  in the same change; the freeze text in `AGENTS.md` does not self-update, and
+  this ledger is what makes "which files are actually off-limits" answerable.
 
 - **The venv minor follows the host, and the host moved again.** `AGENTS.md`
   no longer names a minor (fixed 2026-09-30): it says "Python 3 through a
@@ -343,8 +359,9 @@ and against the code. Findings and what was done:
 
 - **Stale test count in `README.md`** — the "Tests" section said it did not
   repeat the count and then repeated a wrong one (`590`). Removed; the count now
-  lives only in this file. (`AGENTS.md` still reads 763; the write guard blocks
-  edits to it — recorded above, not fixed.)
+  lives only in this file. (`AGENTS.md`'s competing count line was retired
+  2026-10-06 — see the suite-count bullet above — so this file no longer has a
+  rival.)
 - **`CONTEXT.md` had the suite-count bullet duplicated** (the same paragraph
   twice, one truncated). Deduped.
 - **`runner-http-contract.md` verified against `runner.py`** — every route, the
