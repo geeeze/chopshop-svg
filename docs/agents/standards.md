@@ -47,6 +47,25 @@ discipline.
    not yours to commit, stash, or copy over.
 10. **Do not install toolchains into someone else's environment.** Ask first; a
     container without a dependency is a decision somebody made.
+11. **A secret purge rewrites every SHA, so every older clone diverges.** Rewriting
+    history to remove a leaked secret gives every commit a new hash while the
+    content stays identical, so a clone from before the purge reports the same
+    hundreds of commits as "only on local" and "only on origin". **Before your
+    first commit in any repo here: `git fetch`, then
+    `git rev-list --count origin/main..main`.** Non-zero on a repo you have not
+    touched means stop and `git reset --hard origin/main` — committing onto a
+    pre-purge branch republishes the secret the purge was for.
+12. **Pin every dependency; a bare host venv is not a pin.** A venv's
+    `bin/python` symlinks to `/usr/bin/python3`, so a system Python upgrade moves
+    it off its own `site-packages` and it loses its packages with no error at all —
+    observed as a service in a 799-restart loop that systemd reported only as
+    `status=1`. Container, or at minimum a `requirements.txt` with versions in it.
+13. **Verify a fault against the running system before reporting it.** A
+    post-incident report claimed a wiped user table, a Ruby version mismatch and
+    an invalidated secret; all three were false while the real fault was a missing
+    package. Run the check and quote its output (`select count(*) from users`,
+    `ruby -v` against `.ruby-version`, `md5sum`) — a confident wrong diagnosis
+    costs the operator more time than an unfinished one.
 
 ## Issue tracking
 
