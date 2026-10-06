@@ -44,6 +44,10 @@ services:
       # and never belongs in a tracked file: this repo is public.
       JEV_ANNOTATOR: "${JEV_ANNOTATOR:-}"
       JEV_API_KEY: "${JEV_API_KEY:-}"
+      # The LOCAL decision service's key name, accepted as an equal: point
+      # JEV_ENDPOINT at a laya-serve that speaks the same wire protocol and
+      # either token works, so a cutover is one variable and not a rename.
+      LAYA_API_KEY: "${LAYA_API_KEY:-}"
       JEV_ENDPOINT: "${JEV_ENDPOINT:-}"
       JEV_MODEL: "${JEV_MODEL:-}"
     ports:

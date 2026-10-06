@@ -78,8 +78,15 @@ def jev_unavailable_reason() -> str | None:
         return "JEV_ANNOTATOR is not set on the runner"
     if not Path(annotator).is_file():
         return f"Jev annotator not found at {annotator}"
-    if not (os.environ.get("JEV_API_KEY") or os.environ.get("TYPESAFE_API_KEY")):
-        return "JEV_API_KEY is not set on the runner"
+    # The LOCAL backend's own key name counts. The annotator reads all three
+    # (chopshop-jev), so accepting LAYA_API_KEY here is what makes laya a real
+    # alternate rather than a documented one: a check that validates a key the
+    # annotator cannot read reports a wiring bug that does not exist. That is
+    # the shape of bug 875687c fixed one level down, in slop_cannon.
+    if not (os.environ.get("JEV_API_KEY") or os.environ.get("TYPESAFE_API_KEY")
+            or os.environ.get("LAYA_API_KEY")):
+        return ("JEV_API_KEY is not set on the runner "
+                "(or LAYA_API_KEY for the local decision service)")
     return None
 
 

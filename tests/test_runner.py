@@ -147,10 +147,31 @@ def test_jev_reason_names_the_first_missing_piece(monkeypatch):
     monkeypatch.setenv("JEV_ANNOTATOR", str(MODULE_PATH))
     monkeypatch.delenv("JEV_API_KEY", raising=False)
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.delenv("LAYA_API_KEY", raising=False)
     assert "JEV_API_KEY" in runner.jev_unavailable_reason()
+    # And the message names the alternate, so an operator running the local
+    # backend is not told to set the hosted service's key.
+    assert "LAYA_API_KEY" in runner.jev_unavailable_reason()
 
     monkeypatch.setenv("JEV_API_KEY", "test-key")
     assert runner.jev_unavailable_reason() is None
+
+
+def test_the_local_backend_key_alone_makes_jev_available(monkeypatch):
+    """laya as a real alternate, not a documented one.
+
+    LAYA_API_KEY is the local service's own token name. Before this the check
+    refused a deployment that had configured exactly what its own docs said to
+    configure, and the operator got "JEV_API_KEY is not set" for a backend that
+    never used JEV_API_KEY.
+    """
+    monkeypatch.setenv("JEV_ANNOTATOR", str(MODULE_PATH))
+    monkeypatch.delenv("JEV_API_KEY", raising=False)
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("LAYA_API_KEY", "laya-local-token")
+
+    assert runner.jev_unavailable_reason() is None
+    assert runner.health_payload()["tools"]["jev"] is True
 
 
 def test_health_reports_jev_readiness(monkeypatch):
