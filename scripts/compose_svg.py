@@ -383,13 +383,50 @@ def _build(spec):
                 findings["ignored"].append(
                     {"layer": index,
                      "reason": "hue is not applied to raster layers yet"})
-            image = etree.SubElement(root, _svg_tag("image"))
-            image.set("x", _fmt(x))
-            image.set("y", _fmt(y))
-            image.set("width", _fmt(w))
-            image.set("height", _fmt(h))
-            image.set("href", src)
-            image.set("opacity", _fmt(opacity))
+            crop = layer.get("crop")
+            if crop is None:
+                image = etree.SubElement(root, _svg_tag("image"))
+                image.set("x", _fmt(x))
+                image.set("y", _fmt(y))
+                image.set("width", _fmt(w))
+                image.set("height", _fmt(h))
+                image.set("href", src)
+                image.set("opacity", _fmt(opacity))
+            else:
+                # The studio's crop: a window over the source in FRACTIONS of
+                # it (0..1), the same numbers its canvas drew from, so preview,
+                # raster flatten and this compose cut one rect. The nested
+                # viewport IS the clip — viewBox selects the window, the image
+                # fills 0..1 of it, and preserveAspectRatio="none" maps it
+                # exactly onto x/y/w/h the way drawImage does. An uncropped
+                # raster keeps the untouched embed above.
+                if not isinstance(crop, dict):
+                    raise SpecError("layer %d crop must be an object, got %r"
+                                    % (index, crop))
+                cx = _n(crop.get("x"), "layer %d crop x" % index)
+                cy = _n(crop.get("y"), "layer %d crop y" % index)
+                cw = _n(crop.get("w"), "layer %d crop w" % index)
+                ch = _n(crop.get("h"), "layer %d crop h" % index)
+                if cw <= 0 or ch <= 0 or cx < 0 or cy < 0 or \
+                        cx + cw > 1.000001 or cy + ch > 1.000001:
+                    raise SpecError("layer %d crop must sit inside the image "
+                                    "(0..1), got %r" % (index, crop))
+                holder = etree.SubElement(root, _svg_tag("svg"))
+                holder.set("x", _fmt(x))
+                holder.set("y", _fmt(y))
+                holder.set("width", _fmt(w))
+                holder.set("height", _fmt(h))
+                holder.set("viewBox", "%s %s %s %s"
+                           % (_fmt(cx), _fmt(cy), _fmt(cw), _fmt(ch)))
+                holder.set("preserveAspectRatio", "none")
+                image = etree.SubElement(holder, _svg_tag("image"))
+                image.set("x", "0")
+                image.set("y", "0")
+                image.set("width", "1")
+                image.set("height", "1")
+                image.set("preserveAspectRatio", "none")
+                image.set("href", src)
+                image.set("opacity", _fmt(opacity))
 
     _snap_to_palette(root, spec.get("palette"), findings)
     return root, findings

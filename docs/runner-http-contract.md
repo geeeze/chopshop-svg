@@ -198,7 +198,7 @@ reads only `spec` and ignores `op` (the same accepted-and-ignored convention as
 | `palette` | OPTIONAL — the composite's OWN palette, applied to the merged result |
 | `layers` | required list, painted in order |
 
-Each layer is `{type, src, x, y, w, h, opacity, hue}`:
+Each layer is `{type, src, x, y, w, h, opacity, hue, crop}`:
 
 - `type` is `"svg"` (a full inline SVG document string) or `"raster"` (an inline
   `data:` URI). **`src` is ALWAYS inline** — compose never touches the
@@ -220,6 +220,14 @@ Each layer is `{type, src, x, y, w, h, opacity, hue}`:
 - A RASTER layer embeds verbatim as `<image href="data:..." x y width height
   opacity>`. `hue` on a raster layer is NOT applied yet (a documented
   follow-up): it is reported in the runner's log rather than silently dropped.
+- OPTIONAL `crop` (raster only): `{x, y, w, h}` as **fractions of the source
+  image** (0..1, positive width/height, inside the image) — the studio
+  builder's manual crop. The embed becomes a nested `<svg>` viewport whose
+  `viewBox` IS the window, the image fills 0..1 of it, and
+  `preserveAspectRatio="none"` maps it onto `x/y/w/h` exactly like the
+  builder's `drawImage` — one rect everywhere, no re-encoding. A `crop`
+  outside 0..1 or on a non-object is a SpecError (refused, never painted);
+  a layer without `crop` embeds verbatim as before.
 
 If the spec carries a `palette`, the merged document's `fill` / `stroke` /
 `stop-color` are snapped to it through `snap_colors.py`'s own colour maths (its

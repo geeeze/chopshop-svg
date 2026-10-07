@@ -289,6 +289,54 @@ class TestRasterLayers:
         assert report["ignored"][0]["layer"] == 0
         assert "hue" in report["ignored"][0]["reason"]
 
+    def test_a_cropped_raster_clips_through_a_nested_viewport(self):
+        """The studio's crop: fractions of the source, cut by a nested <svg>.
+
+        The viewBox IS the clip window; the image fills 0..1 of it and the
+        whole holder maps onto the layer's x/y/w/h — the same rect the
+        builder's canvas preview drew, without a pixel of re-encoding.
+        """
+        out = compose_svg.compose(spec(layers=[
+            raster(self.URI, x=10, y=20, w=30, h=40,
+                   crop={"x": 0.25, "y": 0, "w": 0.5, "h": 1}),
+        ]))
+        root = parse(out)
+        holders = root.findall(SVG_TAG + "svg")
+        assert len(holders) == 1, "the crop is one nested viewport"
+        holder = holders[0]
+        box = [float(v) for v in (holder.get("viewBox") or "").split()]
+        assert box == [0.25, 0.0, 0.5, 1.0]
+        assert (holder.get("x"), holder.get("y")) == ("10", "20")
+        assert (holder.get("width"), holder.get("height")) == ("30", "40")
+        assert holder.get("preserveAspectRatio") == "none", \
+            "the window maps onto the box exactly, like drawImage"
+        images = holder.findall(SVG_TAG + "image")
+        assert len(images) == 1
+        assert images[0].get("href") == self.URI, "verbatim, not re-encoded"
+        assert (images[0].get("width"), images[0].get("height")) == ("1", "1")
+        assert images[0].get("preserveAspectRatio") == "none"
+        assert root.findall(SVG_TAG + "image") == [], \
+            "the cropped image lives inside the viewport, not beside it"
+
+    def test_an_uncropped_raster_keeps_the_untouched_embed(self):
+        """No crop key means the ORIGINAL embed — this change is opt-in."""
+        out = compose_svg.compose(spec(layers=[
+            raster(self.URI, x=10, y=20, w=30, h=40),
+        ]))
+        root = parse(out)
+        assert root.findall(SVG_TAG + "svg") == [], "no viewport was added"
+        images = root.findall(SVG_TAG + "image")
+        assert len(images) == 1 and images[0].get("width") == "30"
+
+    def test_a_crop_outside_the_image_is_refused(self):
+        for bad in ({"x": 0.5, "y": 0, "w": 0.75, "h": 1},
+                    {"x": -0.1, "y": 0, "w": 0.5, "h": 1},
+                    {"x": 0, "y": 0, "w": 0, "h": 1},
+                    "0.25,0,0.5,1"):
+            with pytest.raises(compose_svg.SpecError) as info:
+                compose_svg.compose(spec(layers=[raster(self.URI, crop=bad)]))
+            assert "crop" in str(info.value)
+
 
 # -------------------------------------------------------------------------- #
 # Palette snapping                                                           #
