@@ -997,3 +997,7 @@ broken.
   ink, and every tool ignores the shared boundaries between adjacent colour
   regions. Includes the measured trade-off curves.
 - `AGENTS.md` — handoff notes for an AI agent (GPT/Hermes/etc.) picking this up.
+
+## Interface contract
+
+See [`docs/contract.md`](docs/contract.md) for the JSON spec, metrics schema, routes, and boundaries.
