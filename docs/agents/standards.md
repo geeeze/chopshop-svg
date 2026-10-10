@@ -36,8 +36,10 @@ discipline.
 5. **Measure; do not assert.** Mark a fact MEASURED and say how it was measured;
    label ESTIMATES as estimates. A comment that promises behaviour is a test spec.
 6. **Host-agnostic.** No absolute paths, hostnames or secrets in code or docs;
-   configuration is environment, read at call time. A fact true only of one box is
-   tagged HOST-SPECIFIC and is expected to be removed before reuse.
+   configuration is environment, read at call time. When a code default must
+   exist, read it from an env var with the current value as fallback. A fact
+   true only of one box is tagged HOST-SPECIFIC and is expected to be removed
+   before reuse.
 7. **Comments are section-level blocks that carry the WHY**, with a small
    `#label-name-function` breadcrumb at the call sites that cross a file or repo
    boundary. Never line-by-line narration.

@@ -5,7 +5,8 @@ the caveats that are not obvious from the code. Update this as work lands.
 
 **Repo visibility: PUBLIC.** Nothing host-specific, no private-stack detail,
 no hostnames/IPs/VPN names, no SwarmUI/ComfyUI references. The `sync-skills`
-script enforces this for `skills/`.
+script enforces this for `skills/`. Code defaults that must remain overridable
+use env vars with the current value as fallback (e.g. `JEV_BASE_URL`).
 
 ## What this repo is
 

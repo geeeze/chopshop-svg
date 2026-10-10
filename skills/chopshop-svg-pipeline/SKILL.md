@@ -466,10 +466,12 @@ So anything committed to `chopshop-svg` is world-readable, including its
 `skills/` directory. Consequences, all learned the hard way:
 
 - No hostnames, hostnames-derived labels, or private network addresses
-  names, or machine nicknames in tracked files — including as code defaults.
-  A hardcoded host in `runner.py` or `app/models/job.rb` is a publication, not
-  a convenience. Use env vars (`CHOPSHOP_RUNNER_<LABEL>_URL`,
-  `CHOPSHOP_EXTRA_HOSTS`, `CHOPSHOP_RUNNER_LABEL`, `RUNNER_BIND`).
+  names, or machine nicknames in tracked files — including as hardcoded
+  defaults. A hardcoded host in `runner.py` or `app/models/job.rb` is a
+  publication, not a convenience. Use env vars (`CHOPSHOP_RUNNER_<LABEL>_URL`,
+  `CHOPSHOP_EXTRA_HOSTS`, `CHOPSHOP_RUNNER_LABEL`, `RUNNER_BIND`,
+  `JEV_BASE_URL`). When a default must exist in code, read it from the env
+  var with the current value as fallback so behavior is unchanged when unset.
 
 **Host-agnostic by construction, not by scrubbing.** The rule is that no
 tracked file encodes a deployment. When a host does leak in, grep the whole

@@ -63,7 +63,7 @@ class JevUnavailable(Exception):
 # The script path and key are configuration, not facts about this machine (this
 # repo is public) — see docker-compose.yml for the env names.
 
-JEV_DEFAULT_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
+JEV_DEFAULT_ENDPOINT = os.environ.get("JEV_BASE_URL", "https://api.typesafe.ai/v1/systemone")
 JEV_TIMEOUT = float(os.environ.get("JEV_TIMEOUT", "180"))
 
 
